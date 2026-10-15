@@ -1,0 +1,632 @@
+// src/App.jsx
+import { useEffect, useState, useRef, useCallback } from "react";
+import { db, seedDemoData } from "./db.js";
+import { rankedSearch, refreshCache } from "./search.js";
+import { performOCR } from "./ocr.js";
+import { deriveTags } from "./tagger.js";
+import { initLLM, subscribeLLMStatus } from "./llmService.js";
+
+export default function App() {
+  const [query, setQuery] = useState("");
+  const [filteredEntries, setFilteredEntries] = useState([]);
+  const [allEntries, setAllEntries] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [manualNote, setManualNote] = useState("");
+  const [autoTags, setAutoTags] = useState([]);
+  const [isProcessingImage, setIsProcessingImage] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState(0);
+  const [llmStatus, setLlmStatus] = useState({ state: "idle", progress: 0 });
+
+  // In-card editing state
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState("");
+
+  const recognizerRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const searchDebounceRef = useRef(null);
+
+  // Load initial entries
+  const loadEntries = useCallback(async () => {
+    await seedDemoData();
+    const entries = await refreshCache();
+    const sorted = [...entries].sort((a, b) => b.timestamp - a.timestamp);
+    setAllEntries(sorted);
+    setFilteredEntries(sorted.slice(0, 20));
+  }, []);
+
+  useEffect(() => {
+    loadEntries();
+    const unsub = subscribeLLMStatus(setLlmStatus);
+    // Initialize LLM in the background
+    initLLM();
+    return () => unsub();
+  }, [loadEntries]);
+
+  // ── Voice recognition ────────────────────────────────────────────────────────
+  useEffect(() => {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    const recognizer = new SpeechRecognition();
+    recognizer.continuous = false;
+    recognizer.interimResults = true;
+    recognizer.lang = "en-US";
+
+    recognizer.onstart = () => setIsListening(true);
+    recognizer.onend = () => setIsListening(false);
+    recognizer.onerror = () => setIsListening(false);
+
+    recognizer.onresult = async (e) => {
+      const transcript = Array.from(e.results)
+        .map((r) => r[0].transcript)
+        .join(" ");
+      setQuery(transcript);
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+      setIsSearching(true);
+      try {
+        const ranked = await rankedSearch(transcript);
+        setFilteredEntries(ranked.slice(0, 20));
+      } finally {
+        setIsSearching(false);
+      }
+    };
+
+    recognizerRef.current = recognizer;
+  }, []);
+
+  const toggleListening = () => {
+    if (!recognizerRef.current) {
+      alert("Voice recognition not supported in this browser.");
+      return;
+    }
+    if (isListening) recognizerRef.current.stop();
+    else recognizerRef.current.start();
+  };
+
+  // ── Live feed filtering (debounced) ──────────────────────────────────────────
+  const handleLiveFilter = useCallback(
+    (q) => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+      if (!q || !q.trim()) {
+        setIsSearching(false);
+        setFilteredEntries(allEntries.slice(0, 20));
+        return;
+      }
+      setIsSearching(true);
+      searchDebounceRef.current = setTimeout(async () => {
+        try {
+          const ranked = await rankedSearch(q);
+          setFilteredEntries(ranked.slice(0, 20));
+        } finally {
+          setIsSearching(false);
+        }
+      }, 150);
+    },
+    [allEntries]
+  );
+
+  const handleQueryChange = (e) => {
+    const val = e.target.value;
+    setQuery(val);
+    handleLiveFilter(val);
+  };
+
+  const handleSearchSubmit = async (e) => {
+    if (e) e.preventDefault();
+    if (!query.trim()) return;
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    setIsSearching(true);
+    try {
+      const ranked = await rankedSearch(query);
+      setFilteredEntries(ranked.slice(0, 20));
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  // ── Quick note with semantic auto-tagging ────────────────────────────────────
+  const handleNoteChange = (e) => {
+    const val = e.target.value;
+    setManualNote(val);
+    setAutoTags(deriveTags(val));
+  };
+
+  const handleAddQuickNote = async (e) => {
+    e.preventDefault();
+    if (!manualNote.trim()) return;
+
+    const tags = deriveTags(manualNote);
+    const newEntry = {
+      id: crypto.randomUUID(),
+      type: "text",
+      content: manualNote.trim(),
+      tags,
+      timestamp: Date.now(),
+    };
+
+    await db.notes.add(newEntry);
+    setManualNote("");
+    setAutoTags([]);
+    const updated = await refreshCache();
+    const sorted = [...updated].sort((a, b) => b.timestamp - a.timestamp);
+    setAllEntries(sorted);
+    if (query.trim()) {
+      const ranked = await rankedSearch(query);
+      setFilteredEntries(ranked.slice(0, 20));
+    } else {
+      setFilteredEntries(sorted.slice(0, 20));
+    }
+  };
+
+  // ── In-card editing ──────────────────────────────────────────────────────────
+  const startEditing = (entry, e) => {
+    if (e) e.stopPropagation();
+    setEditingId(entry.id);
+    setEditText(entry.type === "text" ? entry.content || "" : entry.ocr || "");
+  };
+
+  const cancelEditing = (e) => {
+    if (e) e.stopPropagation();
+    setEditingId(null);
+    setEditText("");
+  };
+
+  const handleSaveEdit = async (entry, e) => {
+    if (e) e.stopPropagation();
+    const updatedText = editText.trim();
+    if (!updatedText) {
+      alert("Text cannot be empty.");
+      return;
+    }
+
+    const updatedTags = deriveTags(updatedText);
+
+    if (entry.type === "text") {
+      await db.notes.update(entry.id, {
+        content: updatedText,
+        tags: updatedTags,
+      });
+    } else {
+      await db.images.update(entry.id, {
+        ocr: updatedText,
+        tags: updatedTags,
+      });
+    }
+
+    // Refresh cache and lists
+    const updated = await refreshCache();
+    const sorted = [...updated].sort((a, b) => b.timestamp - a.timestamp);
+    setAllEntries(sorted);
+
+    if (query.trim()) {
+      const ranked = await rankedSearch(query);
+      setFilteredEntries(ranked.slice(0, 20));
+    } else {
+      setFilteredEntries(sorted.slice(0, 20));
+    }
+
+    setEditingId(null);
+    setEditText("");
+  };
+
+  // ── Image Capture / OCR ──────────────────────────────────────────────────────
+  const readFileAsDataUrl = (file) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+  const extractTagsFromText = (text) => {
+    if (!text) return ["#image"];
+    const tags = deriveTags(text);
+    return tags.length > 0 ? tags : ["#image"];
+  };
+
+  const handleImageCapture = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setIsProcessingImage(true);
+      setOcrProgress(5);
+
+      const dataUrl = await readFileAsDataUrl(file);
+      const extractedText = await performOCR(file, setOcrProgress);
+      const tags = extractTagsFromText(extractedText);
+
+      const newImageEntry = {
+        id: crypto.randomUUID(),
+        type: "image",
+        blobUrl: dataUrl,
+        ocr: extractedText,
+        tags,
+        timestamp: Date.now(),
+      };
+
+      await db.images.add(newImageEntry);
+      const updated = await refreshCache();
+      const sorted = [...updated].sort((a, b) => b.timestamp - a.timestamp);
+      setAllEntries(sorted);
+      setFilteredEntries(sorted.slice(0, 20));
+    } catch (err) {
+      console.error("OCR failed:", err);
+      alert("Error recognizing text. Please try again.");
+    } finally {
+      setIsProcessingImage(false);
+      setOcrProgress(0);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  // ── Delete ───────────────────────────────────────────────────────────────────
+  const handleDeleteEntry = async (entry, e) => {
+    if (e) e.stopPropagation();
+    // if (!window.confirm("Delete this memory?")) return;
+
+    if (entry.type === "image") await db.images.delete(entry.id);
+    else await db.notes.delete(entry.id);
+
+    const updated = await refreshCache();
+    const sorted = [...updated].sort((a, b) => b.timestamp - a.timestamp);
+    setAllEntries(sorted);
+    if (query.trim()) {
+      const ranked = await rankedSearch(query);
+      setFilteredEntries(ranked.slice(0, 20));
+    } else {
+      setFilteredEntries(sorted.slice(0, 20));
+    }
+
+    if (voiceResult && voiceResult.id === entry.id) {
+      setVoiceModalOpen(false);
+      setVoiceResult(null);
+    }
+  };
+
+  const formatTime = (ts) =>
+    new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  // ── Render ───────────────────────────────────────────────────────────────────
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center px-4 py-8 antialiased selection:bg-indigo-500 selection:text-white">
+      {/* Header */}
+      <header className="w-full max-w-xl flex items-center justify-between pb-6 border-b border-slate-800/80 mb-8">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-pulse"></span>
+            Voicepad
+          </h1>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Instant micro-memory scratchpad
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {llmStatus.state === "loading" && (
+            <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-indigo-950/80 border border-indigo-700/50 text-indigo-300 animate-pulse">
+              🧠 AI Loading ({llmStatus.progress}%)
+            </span>
+          )}
+          {llmStatus.state === "ready" && (
+            <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-700/50 text-emerald-300">
+              ⚡ Local AI Ready
+            </span>
+          )}
+          <span className="text-[11px] font-mono tracking-wider uppercase px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-slate-400">
+            Local-First
+          </span>
+        </div>
+      </header>
+
+      <main className="w-full max-w-xl flex flex-col items-center">
+        {/* Voice Orb */}
+        <div className="relative my-6 flex flex-col items-center">
+          {isListening && (
+            <div className="absolute inset-0 -m-3 rounded-full bg-indigo-500/20 blur-xl animate-ping pointer-events-none" />
+          )}
+          <button
+            onClick={toggleListening}
+            className={`relative z-10 w-28 h-28 rounded-full flex flex-col items-center justify-center transition-all duration-300 shadow-2xl active:scale-95 ${
+              isListening
+                ? "bg-rose-600 shadow-rose-500/30 scale-105 ring-4 ring-rose-500/30"
+                : "bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/30 ring-4 ring-indigo-500/20"
+            }`}
+            aria-label="Activate voice search"
+          >
+            <span className="text-3xl mb-1">{isListening ? "🛑" : "🎙️"}</span>
+            <span className="text-[10px] font-semibold tracking-wider uppercase text-white/90">
+              {isListening ? "Listening" : "Tap to Ask"}
+            </span>
+          </button>
+        </div>
+
+        {/* Image Capture */}
+        <div className="w-full flex items-center justify-center gap-3 my-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={handleImageCapture}
+            disabled={isProcessingImage}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isProcessingImage}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-medium border transition shadow-sm ${
+              isProcessingImage
+                ? "bg-slate-800/60 border-slate-700 text-slate-400 cursor-not-allowed"
+                : "bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-slate-700 text-slate-200 active:scale-95"
+            }`}
+          >
+            <span className="text-base">📷</span>
+            <span>
+              {isProcessingImage
+                ? `Scanning OCR (${ocrProgress}%)`
+                : "Snap / Upload Image"}
+            </span>
+          </button>
+        </div>
+
+        {/* OCR Progress */}
+        {isProcessingImage && (
+          <div className="w-full mt-2 mb-3 bg-slate-900 border border-slate-800 rounded-lg p-2.5">
+            <div className="flex justify-between text-[11px] text-slate-400 mb-1 font-mono">
+              <span>Extracting text locally via Tesseract...</span>
+              <span>{ocrProgress}%</span>
+            </div>
+            <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+              <div
+                className="bg-indigo-500 h-full transition-all duration-300 rounded-full"
+                style={{ width: `${ocrProgress}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Search Bar — filters feed live */}
+        <form onSubmit={handleSearchSubmit} className="w-full mt-4">
+          <div className="relative flex items-center">
+            <span className="absolute left-3 text-slate-500 text-sm pointer-events-none">
+              🔍
+            </span>
+            <input
+              type="text"
+              placeholder="Search memories… filters feed as you type"
+              value={query}
+              onChange={handleQueryChange}
+              className="w-full pl-9 pr-24 py-3 bg-slate-900/90 border border-slate-800 rounded-xl text-sm placeholder-slate-500 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition shadow-inner"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => {
+                  setQuery("");
+                  setFilteredEntries(allEntries.slice(0, 20));
+                }}
+                className="absolute right-20 text-slate-500 hover:text-slate-300 text-xs"
+              >
+                ✕
+              </button>
+            )}
+            
+          </div>
+          {/* Show active filter indicator */}
+          {query.trim() && (
+            <p className="text-[11px] text-slate-500 mt-1.5 ml-1">
+              Showing{" "}
+              <span className="text-indigo-400 font-medium">
+                {filteredEntries.length}
+              </span>{" "}
+              best match{filteredEntries.length !== 1 ? "es" : ""} for "{query}"
+            </p>
+          )}
+        </form>
+
+        {/* Quick Note with auto-tagging */}
+        <form onSubmit={handleAddQuickNote} className="w-full mt-3">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              placeholder="Jot a note — tags auto-detected from what you type…"
+              value={manualNote}
+              onChange={handleNoteChange}
+              className="flex-1 px-3 py-2 bg-slate-900/50 border border-slate-800/80 rounded-lg text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-slate-700"
+            />
+            <button
+              type="submit"
+              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium border border-slate-700/80 transition whitespace-nowrap"
+            >
+              + Save
+            </button>
+          </div>
+          {/* Live tag preview */}
+          {manualNote.trim() && autoTags.length > 0 && (
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+              <span className="text-[10px] text-slate-500">Auto-tags:</span>
+              {autoTags.map((tag) => (
+                <span
+                  key={tag}
+                  className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 font-medium"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+        </form>
+
+        {/* Feed — with in-card editing */}
+        <section className="w-full mt-8">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+              {query.trim()
+                ? "Best Matches"
+                : `Stored Memories (${allEntries.length})`}
+            </h2>
+            <span className="text-[11px] text-slate-500">
+              {query.trim()
+                ? `${filteredEntries.length} results`
+                : "Auto-Indexed"}
+            </span>
+          </div>
+
+          {isSearching ? (
+            <div className="space-y-2.5 animate-pulse" aria-label="Loading search results">
+              {[1, 2, 3].map((i) => (
+                <div
+                  key={i}
+                  className="p-3.5 bg-slate-900/40 border border-slate-800/60 rounded-xl flex items-start justify-between gap-3"
+                >
+                  <div className="flex-1 space-y-2">
+                    <div className="h-3.5 bg-slate-800 rounded w-3/4" />
+                    <div className="h-3 bg-slate-800/70 rounded w-1/2" />
+                    <div className="flex gap-1.5 pt-1">
+                      <div className="h-4 bg-slate-800/80 rounded w-12" />
+                      <div className="h-4 bg-slate-800/80 rounded w-14" />
+                    </div>
+                  </div>
+                  <div className="w-10 h-3 bg-slate-800/50 rounded shrink-0" />
+                </div>
+              ))}
+            </div>
+          ) : filteredEntries.length === 0 && query.trim() ? (
+            <div className="py-10 text-center">
+              <p className="text-slate-400 text-sm">
+                No matches found for "{query}"
+              </p>
+              <p className="text-slate-600 text-xs mt-1">
+                Try a different keyword or clear the search
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {filteredEntries.map((entry) => {
+                const isEditing = editingId === entry.id;
+
+                return (
+                  <div
+                    key={entry.id}
+                    className="p-3.5 bg-slate-900/70 border border-slate-800/80 hover:border-slate-700 rounded-xl transition flex flex-col gap-2.5 shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      {entry.type === "image" && (
+                        <div className="w-12 h-12 shrink-0 rounded-lg overflow-hidden bg-slate-950 border border-slate-800 self-center">
+                          <img
+                            src={entry.blobUrl}
+                            alt="Thumb"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      )}
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+                            {entry.type === "image" ? "📷 OCR" : "📝 Note"}
+                          </span>
+                        </div>
+
+                        {/* Inline Edit Form OR Card Content */}
+                        {isEditing ? (
+                          <div className="mt-1 space-y-2">
+                            <textarea
+                              value={editText}
+                              onChange={(e) => setEditText(e.target.value)}
+                              rows={3}
+                              className="w-full p-2.5 bg-slate-950 border border-indigo-500/50 rounded-lg text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              placeholder="Edit memory content..."
+                              autoFocus
+                            />
+                            {/* Live preview of auto-tags while editing */}
+                            {editText.trim() && (
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-[10px] text-slate-500">
+                                  Updated tags:
+                                </span>
+                                {deriveTags(editText).map((tag) => (
+                                  <span
+                                    key={tag}
+                                    className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 font-medium"
+                                  >
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            <div className="flex items-center gap-2 pt-1">
+                              <button
+                                onClick={(e) => handleSaveEdit(entry, e)}
+                                className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium transition shadow"
+                              >
+                                Save
+                              </button>
+                              <button
+                                onClick={cancelEditing}
+                                className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
+                              {entry.type === "text"
+                                ? entry.content
+                                : entry.ocr || "(No readable text in image)"}
+                            </p>
+                            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                              {entry.tags?.map((tag) => (
+                                <span
+                                  key={tag}
+                                  className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 font-medium"
+                                >
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Right Action Icons (Edit, Delete, Timestamp) */}
+                      {!isEditing && (
+                        <div className="flex flex-col items-end gap-1.5 shrink-0">
+                          <span className="text-[10px] text-slate-500 font-mono">
+                            {formatTime(entry.timestamp)}
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={(e) => startEditing(entry, e)}
+                              className="text-[12px] text-slate-400 hover:text-indigo-400 p-1 rounded hover:bg-slate-800 transition"
+                              title="Edit memory"
+                              aria-label="Edit memory"
+                            >
+                              ✏️
+                            </button>
+                            <button
+                              onClick={(e) => handleDeleteEntry(entry, e)}
+                              className="text-[12px] text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-slate-800 transition"
+                              title="Delete memory"
+                              aria-label="Delete memory"
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </main>
+    </div>
+  );
+}
