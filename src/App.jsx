@@ -1,13 +1,15 @@
 // src/App.jsx
 import { useEffect, useState, useRef, useCallback } from "react";
 import { db, seedDemoData } from "./db.js";
-import { rankedSearch, refreshCache } from "./search.js";
+import { rankedSearch, fastSearch, refreshCache } from "./search.js";
 import { performOCR } from "./ocr.js";
 import { deriveTags } from "./tagger.js";
 import { initLLM, subscribeLLMStatus } from "./llmService.js";
 
 export default function App() {
   const [query, setQuery] = useState("");
+  const [voiceTranscript, setVoiceTranscript] = useState("");
+  const [searchMode, setSearchMode] = useState("all"); // "voice" | "text" | "all"
   const [filteredEntries, setFilteredEntries] = useState([]);
   const [allEntries, setAllEntries] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -62,12 +64,23 @@ export default function App() {
       const transcript = Array.from(e.results)
         .map((r) => r[0].transcript)
         .join(" ");
-      setQuery(transcript);
+
+      // Update the Instagram Notes-style voice bubble floater
+      setVoiceTranscript(transcript);
+      setSearchMode("voice");
+
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
       setIsSearching(true);
+
       try {
-        const ranked = await rankedSearch(transcript);
-        setFilteredEntries(ranked.slice(0, 20));
+        // Instant top-confidence hit using fastSearch (local rules + LLM intent refinement)
+        const bestHit = await fastSearch(transcript);
+        if (bestHit) {
+          // Immediately display ONLY the single most confident match
+          setFilteredEntries([bestHit]);
+        } else {
+          setFilteredEntries([]);
+        }
       } finally {
         setIsSearching(false);
       }
@@ -85,15 +98,23 @@ export default function App() {
     else recognizerRef.current.start();
   };
 
-  // ── Live feed filtering (debounced) ──────────────────────────────────────────
+  const clearVoiceSearch = () => {
+    setVoiceTranscript("");
+    setSearchMode("all");
+    setFilteredEntries(allEntries.slice(0, 20));
+  };
+
+  // ── Live feed filtering for manual text search (debounced) ───────────────────
   const handleLiveFilter = useCallback(
     (q) => {
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
       if (!q || !q.trim()) {
         setIsSearching(false);
+        setSearchMode("all");
         setFilteredEntries(allEntries.slice(0, 20));
         return;
       }
+      setSearchMode("text");
       setIsSearching(true);
       searchDebounceRef.current = setTimeout(async () => {
         try {
@@ -117,6 +138,7 @@ export default function App() {
     if (e) e.preventDefault();
     if (!query.trim()) return;
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    setSearchMode("text");
     setIsSearching(true);
     try {
       const ranked = await rankedSearch(query);
@@ -321,8 +343,32 @@ export default function App() {
       </header>
 
       <main className="w-full max-w-xl flex flex-col items-center">
-        {/* Voice Orb */}
+        {/* Voice Orb with Instagram Notes-inspired Floater Bubble */}
         <div className="relative my-6 flex flex-col items-center">
+          {/* Instagram Notes Floater Bubble (Top-Right of Mic) */}
+          {(voiceTranscript || isListening) && (
+            <div className="absolute -top-10 -right-8 z-20 flex flex-col items-start max-w-[210px] animate-in fade-in zoom-in-95 duration-200">
+              <div className="relative px-3 py-1.5 bg-indigo-600 text-white rounded-2xl rounded-bl-sm shadow-xl border border-indigo-400/40 flex items-center gap-1.5 backdrop-blur-md">
+                <span className="text-xs">💭</span>
+                <span className="text-xs font-medium tracking-tight truncate max-w-[150px]">
+                  {voiceTranscript ? `"${voiceTranscript}"` : "Listening..."}
+                </span>
+                {voiceTranscript && (
+                  <button
+                    onClick={clearVoiceSearch}
+                    className="ml-1 text-[11px] text-indigo-200 hover:text-white px-1 py-0.5 rounded-full hover:bg-indigo-700/60 transition"
+                    title="Clear voice query"
+                    aria-label="Clear voice query"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+              {/* Instagram Notes speech bubble pointer dot */}
+              <div className="w-2 h-2 bg-indigo-600 rounded-full ml-2 -mt-0.5 border border-indigo-400/30" />
+            </div>
+          )}
+
           {isListening && (
             <div className="absolute inset-0 -m-3 rounded-full bg-indigo-500/20 blur-xl animate-ping pointer-events-none" />
           )}
@@ -387,7 +433,7 @@ export default function App() {
           </div>
         )}
 
-        {/* Search Bar — filters feed live */}
+        {/* Search Bar — manual text filter */}
         <form onSubmit={handleSearchSubmit} className="w-full mt-4">
           <div className="relative flex items-center">
             <span className="absolute left-3 text-slate-500 text-sm pointer-events-none">
@@ -405,6 +451,7 @@ export default function App() {
                 type="button"
                 onClick={() => {
                   setQuery("");
+                  setSearchMode("all");
                   setFilteredEntries(allEntries.slice(0, 20));
                 }}
                 className="absolute right-20 text-slate-500 hover:text-slate-300 text-xs"
@@ -414,14 +461,14 @@ export default function App() {
             )}
             
           </div>
-          {/* Show active filter indicator */}
-          {query.trim() && (
+          {/* Show active filter indicator for manual text */}
+          {query.trim() && searchMode === "text" && (
             <p className="text-[11px] text-slate-500 mt-1.5 ml-1">
               Showing{" "}
               <span className="text-indigo-400 font-medium">
                 {filteredEntries.length}
               </span>{" "}
-              best match{filteredEntries.length !== 1 ? "es" : ""} for "{query}"
+              match{filteredEntries.length !== 1 ? "es" : ""} for "{query}"
             </p>
           )}
         </form>
@@ -462,15 +509,31 @@ export default function App() {
         {/* Feed — with in-card editing */}
         <section className="w-full mt-8">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              {query.trim()
-                ? "Best Matches"
-                : `Stored Memories (${allEntries.length})`}
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+              {searchMode === "voice" && voiceTranscript.trim() ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                  Top Voice Match
+                </>
+              ) : query.trim() ? (
+                "Best Matches"
+              ) : (
+                `Stored Memories (${allEntries.length})`
+              )}
             </h2>
             <span className="text-[11px] text-slate-500">
-              {query.trim()
-                ? `${filteredEntries.length} results`
-                : "Auto-Indexed"}
+              {searchMode === "voice" && voiceTranscript.trim() ? (
+                <button
+                  onClick={clearVoiceSearch}
+                  className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2 transition"
+                >
+                  Show all memories
+                </button>
+              ) : query.trim() ? (
+                `${filteredEntries.length} results`
+              ) : (
+                "Auto-Indexed"
+              )}
             </span>
           </div>
 
@@ -493,13 +556,13 @@ export default function App() {
                 </div>
               ))}
             </div>
-          ) : filteredEntries.length === 0 && query.trim() ? (
+          ) : filteredEntries.length === 0 && (query.trim() || voiceTranscript.trim()) ? (
             <div className="py-10 text-center">
               <p className="text-slate-400 text-sm">
-                No matches found for "{query}"
+                No matching memory found for "{voiceTranscript || query}"
               </p>
               <p className="text-slate-600 text-xs mt-1">
-                Try a different keyword or clear the search
+                Try asking differently or check your stored notes below.
               </p>
             </div>
           ) : (
