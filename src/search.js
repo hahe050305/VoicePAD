@@ -84,14 +84,29 @@ function scoreEntry(entry, tokens, rawLower, llmIntent = null) {
     }
   }
 
-  // Null OCR fallback: If query asked for a visual object (vehicle, license, id)
-  // and this is an image entry without readable text, give it a soft baseline score
-  // so it doesn't get completely dropped
-  if (entry.type === "image" && (!entry.ocr || !entry.ocr.trim())) {
-    const visualHints = ["#vehicle", "#document", "#bill", "#parking"];
-    const matchesVisualHint = tokens.some((t) => visualHints.includes(t));
-    if (matchesVisualHint) {
-      score += 2; // eligible as a soft fallback match
+  // Null / Blurred OCR fallback:
+  // If entry is an image with minimal or unreadable OCR text,
+  // score it favorably when the query asks for visual items, documents, cards, or photos
+  if (entry.type === "image") {
+    const ocrLen = (entry.ocr || "").trim().length;
+    const isBlurredOrEmpty = ocrLen < 15; // no text or only fragmented noise
+
+    if (isBlurredOrEmpty) {
+      const visualHints = [
+        "#photo",
+        "#image",
+        "#document",
+        "#vehicle",
+        "#bill",
+        "#parking",
+        "#finance",
+        "#contact"
+      ];
+      const matchesVisualHint = tokens.some((t) => visualHints.includes(t));
+      if (matchesVisualHint) {
+        // Generous boost so tight situations retrieve the photo immediately
+        score += 8;
+      }
     }
   }
 
@@ -133,18 +148,32 @@ export async function rankedSearch(rawQuery, llmIntent = null) {
 
 /**
  * Hybrid fast search used for voice lookup:
- * 1. Executes instantaneous local rule match (<2ms).
- * 2. Concurrently asks local LLM for deep semantic intent.
- * 3. Returns the highest confidence match.
+ * 1. Instant local response (<2ms) via aliasMap & rule-matching.
+ * 2. If high-confidence match found immediately, returns right away for speed.
+ * 3. Otherwise races LLM intent parsing with a strict 400ms budget to prevent lag.
  */
-export async function fastSearch(rawQuery) {
-  // 1. Instant local response
+export async function fastSearch(rawQuery, onProgressHit = null) {
+  // 1. Instant local response (<2ms)
   const initialRanked = await rankedSearch(rawQuery);
   let bestHit = initialRanked.length > 0 ? initialRanked[0] : null;
 
-  // 2. Try LLM intent refinement if query is complex
+  // If initial hit is already available, notify caller immediately for zero perceived lag
+  if (bestHit && typeof onProgressHit === "function") {
+    onProgressHit(bestHit);
+  }
+
+  // 2. If we already have a strong match (e.g., direct phrase, high-signal tags),
+  // return immediately to maintain lightning-fast voice response
+  if (bestHit && initialRanked.length === 1) {
+    return bestHit;
+  }
+
+  // 3. Concurrently refine with local LLM with a 450ms deadline
   try {
-    const intent = await parseIntentWithLLM(rawQuery);
+    const intentPromise = parseIntentWithLLM(rawQuery);
+    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 450));
+    const intent = await Promise.race([intentPromise, timeoutPromise]);
+
     if (intent && (intent.target || (intent.categories && intent.categories.length > 0))) {
       const refinedRanked = await rankedSearch(rawQuery, intent);
       if (refinedRanked.length > 0) {
@@ -152,7 +181,7 @@ export async function fastSearch(rawQuery) {
       }
     }
   } catch (err) {
-    console.debug("LLM intent parsing skipped or timed out:", err);
+    console.debug("LLM refinement skipped for speed:", err);
   }
 
   return bestHit;

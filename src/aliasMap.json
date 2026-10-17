@@ -240,5 +240,22 @@
   "cng": "#fuel",
   "gas": "#fuel",
   "pump": "#fuel",
-  "station": "#fuel"
+  "station": "#fuel",
+
+  "photo": "#photo",
+  "picture": "#photo",
+  "pic": "#photo",
+  "pics": "#photo",
+  "image": "#photo",
+  "snap": "#photo",
+  "selfie": "#photo",
+  "me": "#photo",
+  "portrait": "#photo",
+  "camera": "#photo",
+  "blurred": "#photo",
+  "blur": "#photo",
+  "capture": "#photo",
+  "receipt": "#bill",
+  "invoice": "#bill",
+  "bill": "#bill"
 }
