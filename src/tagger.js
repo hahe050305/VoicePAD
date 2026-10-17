@@ -17,6 +17,9 @@ const semanticPatterns = [
   { pattern: /\b(number\s*plate|license\s*plate|registration|rc\s*book)\b/, tags: ["#vehicle", "#document"] },
   { pattern: /\b(drove|riding|drive|ride)\b/, tags: ["#vehicle"] },
 
+  // ── Photos & Selfies ──────────────────────────────────────────────────────
+  { pattern: /\b(selfie|photo|picture|pic|pics|portrait|snap|my\s+face|photo\s+of\s+me|my\s+selfie|my\s+photo|camera\s+roll)\b/, tags: ["#photo", "#selfie"] },
+
   // ── Security / Credentials ────────────────────────────────────────────────
   { pattern: /\b(password|passwd|pwd|pass|passcode)\b/, tags: ["#security"] },
   { pattern: /\b(pin|mpin|atm\s*pin|otp)\b/, tags: ["#security"] },
