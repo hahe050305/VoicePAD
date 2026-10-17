@@ -3,6 +3,7 @@ import { db } from "./db.js";
 import aliasMap from "./aliasMap.json";
 import { deriveTags } from "./tagger.js";
 import { parseIntentWithLLM } from "./llmService.js";
+import { isPureImageText } from "./ocr.js";
 
 /**
  * Normalizes a raw query string into lowercase tokens,
@@ -14,20 +15,24 @@ export function normalizeQuery(query) {
   // Get semantic tags from the full query
   const semanticTags = deriveTags(query);
 
-  // Also tokenize individual words for substring matching
-  const wordTokens = query
+  // Also tokenize individual words for substring matching (preserve BOTH raw word AND mapped tag)
+  const rawWordTokens = [];
+  const aliasTags = [];
+
+  query
     .toLowerCase()
     .replace(/[^\w\s#]/g, " ")
     .split(/\s+/)
     .filter(Boolean)
-    .map((t) => {
-      if (t.startsWith("#")) return t;
-      const mapped = aliasMap[t];
-      return mapped ? mapped : t;
+    .forEach((t) => {
+      rawWordTokens.push(t);
+      if (aliasMap[t]) {
+        aliasTags.push(aliasMap[t]);
+      }
     });
 
-  // Merge: semantic tags + raw word tokens (deduped)
-  const merged = new Set([...semanticTags, ...wordTokens]);
+  // Merge: semantic tags + alias tags + raw word tokens (deduped)
+  const merged = new Set([...semanticTags, ...aliasTags, ...rawWordTokens]);
   return Array.from(merged);
 }
 
@@ -52,61 +57,112 @@ export function getCachedEntries() {
  */
 function scoreEntry(entry, tokens, rawLower, llmIntent = null) {
   let score = 0;
-  const text = (
+  const labelText = (entry.label || "").trim();
+  const mainText = (
     entry.type === "text" ? entry.content || "" : entry.ocr || ""
-  ).toLowerCase();
+  ).trim();
+  const fullText = `${labelText} ${mainText}`.toLowerCase();
 
-  // Exact full-phrase match (highest signal)
-  if (text.includes(rawLower)) score += 15;
+  const isPure =
+    entry.type === "image" &&
+    (entry.isPureImage === true || (!entry.ocr && !entry.label) || isPureImageText(entry.ocr));
 
-  // Per-token match against content/ocr
+  // Determine effective tags for the entry:
+  // If entry has readable text and is not a pure image, strip #photo tags so text docs don't masquerade as photos
+  const rawTags = entry.tags || [];
+  const effectiveTags = new Set(
+    rawTags.filter((t) => {
+      if (!isPure && (t === "#photo" || t === "#selfie") && !fullText.includes("photo") && !fullText.includes("selfie")) {
+        return false;
+      }
+      return true;
+    })
+  );
+
+  if (isPure) {
+    effectiveTags.add("#photo");
+    effectiveTags.add("#selfie");
+    effectiveTags.add("#image");
+    effectiveTags.add("#picture");
+  }
+
+  // 1. Exact full-phrase match against text/label (highest signal)
+  if (rawLower && fullText.includes(rawLower)) {
+    score += 35;
+  }
+
+  // 2. Direct manual label match
+  if (labelText && (rawLower.includes(labelText.toLowerCase()) || labelText.toLowerCase().includes(rawLower))) {
+    score += 40;
+  }
+
+  // 3. Per-token match against content/ocr/label (word matches)
   tokens.forEach((t) => {
-    if (!t.startsWith("#") && text.includes(t)) score += 3;
+    if (!t.startsWith("#")) {
+      if (labelText && labelText.toLowerCase().includes(t)) {
+        score += 25; // High confidence for user-labeled images
+      } else if (mainText.toLowerCase().includes(t)) {
+        score += 15;
+      }
+    }
   });
 
-  // Tag matches
+  // 4. Tag matches against sanitized effective tags
   const tagTokens = tokens.filter((t) => t.startsWith("#"));
   tagTokens.forEach((t) => {
-    if (entry.tags && entry.tags.includes(t)) score += 10;
+    if (effectiveTags.has(t)) {
+      if ((t === "#photo" || t === "#selfie") && !isPure && !fullText.includes("photo") && !fullText.includes("selfie")) {
+        return; // Skip false photo tags on text notes
+      }
+      score += 12;
+    }
   });
 
-  // LLM Intent Boost
+  // 5. Manual label tag match: e.g. token 'aadhaar' matching '#label_aadhaar'
+  tokens.forEach((t) => {
+    const cleanT = t.replace(/^#/, "");
+    if (effectiveTags.has(`#label_${cleanT}`) || effectiveTags.has(`#${cleanT}`)) {
+      score += 30;
+    }
+  });
+
+  // 6. Photo & Selfie Intent Match
+  const isPhotoQuery = tokens.some((t) =>
+    ["#photo", "#selfie", "selfie", "photo", "picture", "pic", "pics", "portrait", "snap"].includes(t)
+  );
+
+  if (isPhotoQuery) {
+    if (isPure) {
+      // Pure photograph / selfie match
+      score += 30;
+    } else {
+      // Non-photo document or text note: DISQUALIFY from matching photo/selfie queries
+      // unless the text explicitly contains the word "selfie" or "photo"
+      const hasExplicit = fullText.includes("selfie") || fullText.includes("photo") || fullText.includes("portrait");
+      if (!hasExplicit) {
+        return 0; // Immediate 0 score
+      }
+    }
+  }
+
+  // 7. General text query on an unlabeled pure image:
+  // If user is searching for something specific like "harish", "insurance", "bike", "wifi", "bill":
+  // A pure photo that has no text and no matching label must NOT match!
+  if (isPure && !isPhotoQuery && !labelText) {
+    return 0;
+  }
+
+  // 8. LLM Intent Boost
   if (llmIntent) {
-    if (llmIntent.target && text.includes(llmIntent.target.toLowerCase())) {
+    if (llmIntent.target && fullText.includes(llmIntent.target.toLowerCase())) {
       score += 12;
     }
     if (llmIntent.categories && Array.isArray(llmIntent.categories)) {
       llmIntent.categories.forEach((cat) => {
-        if (entry.tags && entry.tags.includes(cat)) {
+        if (effectiveTags.has(cat)) {
           score += 8;
         }
       });
-    }
-  }
-
-  // Null / Blurred OCR fallback:
-  // If entry is an image with minimal or unreadable OCR text,
-  // score it favorably when the query asks for visual items, documents, cards, or photos
-  if (entry.type === "image") {
-    const ocrLen = (entry.ocr || "").trim().length;
-    const isBlurredOrEmpty = ocrLen < 15; // no text or only fragmented noise
-
-    if (isBlurredOrEmpty) {
-      const visualHints = [
-        "#photo",
-        "#image",
-        "#document",
-        "#vehicle",
-        "#bill",
-        "#parking",
-        "#finance",
-        "#contact"
-      ];
-      const matchesVisualHint = tokens.some((t) => visualHints.includes(t));
-      if (matchesVisualHint) {
-        // Generous boost so tight situations retrieve the photo immediately
-        score += 8;
-      }
     }
   }
 
@@ -143,35 +199,30 @@ export async function rankedSearch(rawQuery, llmIntent = null) {
       if (b.score !== a.score) return b.score - a.score;
       return b.entry.timestamp - a.entry.timestamp;
     })
-    .map((item) => item.entry);
+    .map((item) => ({ ...item.entry, _score: item.score }));
 }
 
 /**
- * Hybrid fast search used for voice lookup:
+ * Fast search used for voice lookup:
+ * Returns ONLY the single highest-confidence match (no candidate lists).
  * 1. Instant local response (<2ms) via aliasMap & rule-matching.
- * 2. If high-confidence match found immediately, returns right away for speed.
- * 3. Otherwise races LLM intent parsing with a strict 400ms budget to prevent lag.
+ * 2. Background LLM refinement within a strict deadline.
  */
 export async function fastSearch(rawQuery, onProgressHit = null) {
-  // 1. Instant local response (<2ms)
   const initialRanked = await rankedSearch(rawQuery);
-  let bestHit = initialRanked.length > 0 ? initialRanked[0] : null;
+  if (initialRanked.length === 0) return null;
 
-  // If initial hit is already available, notify caller immediately for zero perceived lag
-  if (bestHit && typeof onProgressHit === "function") {
+  let bestHit = initialRanked[0];
+
+  // If initial hit is available, notify caller immediately
+  if (typeof onProgressHit === "function") {
     onProgressHit(bestHit);
   }
 
-  // 2. If we already have a strong match (e.g., direct phrase, high-signal tags),
-  // return immediately to maintain lightning-fast voice response
-  if (bestHit && initialRanked.length === 1) {
-    return bestHit;
-  }
-
-  // 3. Concurrently refine with local LLM with a 450ms deadline
+  // Refine with local LLM if intent helps narrow down
   try {
     const intentPromise = parseIntentWithLLM(rawQuery);
-    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 450));
+    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 350));
     const intent = await Promise.race([intentPromise, timeoutPromise]);
 
     if (intent && (intent.target || (intent.categories && intent.categories.length > 0))) {

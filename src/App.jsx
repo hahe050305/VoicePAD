@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { db, seedDemoData } from "./db.js";
 import { rankedSearch, fastSearch, refreshCache } from "./search.js";
-import { performOCR } from "./ocr.js";
+import { performOCR, isPureImageText } from "./ocr.js";
 import { deriveTags } from "./tagger.js";
 import { initLLM, subscribeLLMStatus } from "./llmService.js";
 
@@ -23,6 +23,7 @@ export default function App() {
   // In-card editing state
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState("");
+  const [editLabel, setEditLabel] = useState("");
 
   const recognizerRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -82,11 +83,12 @@ export default function App() {
       setIsSearching(true);
 
       try {
-        // Instant top-confidence hit using fastSearch (progressive: immediate local hit, then refinement)
+        // Return ONLY the single most confident match instantly without handing lists
         const bestHit = await fastSearch(transcript, (instantHit) => {
-          // Immediately display instant hit without waiting for worker/LLM
-          setFilteredEntries([instantHit]);
-          setIsSearching(false);
+          if (instantHit) {
+            setFilteredEntries([instantHit]);
+            setIsSearching(false);
+          }
         });
 
         if (bestHit) {
@@ -222,33 +224,46 @@ export default function App() {
     if (e) e.stopPropagation();
     setEditingId(entry.id);
     setEditText(entry.type === "text" ? entry.content || "" : entry.ocr || "");
+    setEditLabel(entry.label || "");
   };
 
   const cancelEditing = (e) => {
     if (e) e.stopPropagation();
     setEditingId(null);
     setEditText("");
+    setEditLabel("");
   };
 
   const handleSaveEdit = async (entry, e) => {
     if (e) e.stopPropagation();
     const updatedText = editText.trim();
-    if (!updatedText) {
-      alert("Text cannot be empty.");
+    const updatedLabel = editLabel.trim();
+
+    if (!updatedText && !updatedLabel) {
+      alert("Text or label cannot be empty.");
       return;
     }
 
-    const updatedTags = deriveTags(updatedText);
-
     if (entry.type === "text") {
+      const updatedTags = deriveTags(updatedText);
       await db.notes.update(entry.id, {
         content: updatedText,
         tags: updatedTags,
       });
     } else {
+      const autoTags = extractTagsFromText(updatedText);
+      let labelTags = [];
+      if (updatedLabel) {
+        const normalized = updatedLabel.toLowerCase().replace(/[^a-z0-9]/g, "_");
+        const derived = deriveTags(updatedLabel);
+        labelTags = [`#label_${normalized}`, `#${normalized}`, ...derived];
+      }
+      const combinedTags = Array.from(new Set([...labelTags, ...autoTags]));
+
       await db.images.update(entry.id, {
         ocr: updatedText,
-        tags: updatedTags,
+        label: updatedLabel,
+        tags: combinedTags,
       });
     }
 
@@ -266,6 +281,7 @@ export default function App() {
 
     setEditingId(null);
     setEditText("");
+    setEditLabel("");
   };
 
   // ── Image Capture / OCR ──────────────────────────────────────────────────────
@@ -292,15 +308,45 @@ export default function App() {
       setOcrProgress(5);
 
       const dataUrl = await readFileAsDataUrl(file);
-      const extractedText = await performOCR(file, setOcrProgress);
-      const tags = extractTagsFromText(extractedText);
+      const ocrResult = await performOCR(file, setOcrProgress);
+      const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult.text || "");
+      const isPure = typeof ocrResult === "object" ? ocrResult.isPureImage : isPureImageText(extractedText);
+
+      // Disambiguation prompt for blurry or pure image uploads
+      let manualLabel = "";
+      let manualLabelTags = [];
+      const ocrClean = (extractedText || "").trim();
+      const isBlurredOrEmpty = isPure || ocrClean.length < 15;
+
+      if (isBlurredOrEmpty) {
+        const userInput = window.prompt(
+          "No clear text detected. Please label this image so voice search finds it instantly (e.g. Aadhaar, PAN, License Plate, Photo):"
+        );
+        if (userInput && userInput.trim()) {
+          manualLabel = userInput.trim();
+          const normalized = manualLabel.toLowerCase().replace(/[^a-z0-9]/g, "_");
+          const derived = deriveTags(manualLabel);
+          manualLabelTags = [
+            `#label_${normalized}`,
+            `#${normalized}`,
+            ...derived,
+          ];
+        }
+      }
+
+      const autoTags = extractTagsFromText(extractedText);
+      const combinedTags = Array.from(
+        new Set([...manualLabelTags, ...autoTags, "#image", ...(isPure ? ["#photo", "#selfie"] : [])])
+      );
 
       const newImageEntry = {
         id: crypto.randomUUID(),
         type: "image",
         blobUrl: dataUrl,
-        ocr: extractedText,
-        tags,
+        label: manualLabel,
+        ocr: isPure ? "" : extractedText,
+        isPureImage: isPure,
+        tags: combinedTags,
         timestamp: Date.now(),
       };
 
@@ -335,11 +381,6 @@ export default function App() {
       setFilteredEntries(ranked.slice(0, 20));
     } else {
       setFilteredEntries(sorted.slice(0, 20));
-    }
-
-    if (voiceResult && voiceResult.id === entry.id) {
-      setVoiceModalOpen(false);
-      setVoiceResult(null);
     }
   };
 
@@ -604,6 +645,9 @@ export default function App() {
             <div className="space-y-2.5">
               {filteredEntries.map((entry) => {
                 const isEditing = editingId === entry.id;
+                const isPureImage =
+                  entry.type === "image" &&
+                  (entry.isPureImage === true || (!entry.ocr && !entry.label) || isPureImageText(entry.ocr));
 
                 return (
                   <div
@@ -611,7 +655,8 @@ export default function App() {
                     className="p-3.5 bg-slate-900/70 border border-slate-800/80 hover:border-slate-700 rounded-xl transition flex flex-col gap-2.5 shadow-sm"
                   >
                     <div className="flex items-start justify-between gap-3">
-                      {entry.type === "image" && (
+                      {/* For text-bearing images, show small thumbnail on the left */}
+                      {entry.type === "image" && !isPureImage && (
                         <div className="w-12 h-12 shrink-0 rounded-lg overflow-hidden bg-slate-950 border border-slate-800 self-center">
                           <img
                             src={entry.blobUrl}
@@ -622,30 +667,59 @@ export default function App() {
                       )}
 
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5 mb-1">
+                        <div className="flex items-center gap-1.5 mb-1 flex-wrap">
                           <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
-                            {entry.type === "image" ? "📷 OCR" : "📝 Note"}
+                            {entry.type === "image"
+                              ? isPureImage
+                                ? "🖼️ Image"
+                                : "📷 OCR"
+                              : "📝 Note"}
                           </span>
+                          {entry.label && (
+                            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/40 text-indigo-300 flex items-center gap-1">
+                              🏷️ {entry.label}
+                            </span>
+                          )}
                         </div>
 
                         {/* Inline Edit Form OR Card Content */}
                         {isEditing ? (
                           <div className="mt-1 space-y-2">
+                            {entry.type === "image" && (
+                              <div>
+                                <label className="text-[10px] text-slate-400 block mb-1 font-medium">
+                                  Image Label:
+                                </label>
+                                <input
+                                  type="text"
+                                  value={editLabel}
+                                  onChange={(e) => setEditLabel(e.target.value)}
+                                  className="w-full px-2.5 py-1.5 bg-slate-950 border border-indigo-500/50 rounded-lg text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 mb-2"
+                                  placeholder="e.g. My Photo, Aadhaar Card, License Plate..."
+                                  autoFocus
+                                />
+                              </div>
+                            )}
                             <textarea
                               value={editText}
                               onChange={(e) => setEditText(e.target.value)}
-                              rows={3}
+                              rows={isPureImage ? 2 : 3}
                               className="w-full p-2.5 bg-slate-950 border border-indigo-500/50 rounded-lg text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                              placeholder="Edit memory content..."
-                              autoFocus
+                              placeholder={
+                                isPureImage
+                                  ? "Optional description / caption..."
+                                  : entry.type === "image"
+                                  ? "Extracted OCR text..."
+                                  : "Edit memory content..."
+                              }
                             />
                             {/* Live preview of auto-tags while editing */}
-                            {editText.trim() && (
+                            {(editText.trim() || editLabel.trim()) && (
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <span className="text-[10px] text-slate-500">
                                   Updated tags:
                                 </span>
-                                {deriveTags(editText).map((tag) => (
+                                {deriveTags(`${editLabel} ${editText}`).map((tag) => (
                                   <span
                                     key={tag}
                                     className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 font-medium"
@@ -670,7 +744,40 @@ export default function App() {
                               </button>
                             </div>
                           </div>
+                        ) : isPureImage ? (
+                          /* Pure Image: hide the OCR text, display the image alone with "Image placeholder" */
+                          <div className="mt-1 space-y-2">
+                            <div className="w-full max-h-80 rounded-xl overflow-hidden bg-slate-950 border border-slate-800/90 flex items-center justify-center p-1 group">
+                              <img
+                                src={entry.blobUrl}
+                                alt={entry.label || "Image placeholder"}
+                                className="max-h-72 w-auto object-contain rounded-lg group-hover:scale-[1.01] transition-transform duration-200"
+                              />
+                            </div>
+                            <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                              <span>🖼️</span>
+                              <span className="font-medium italic text-slate-300">
+                                Image placeholder
+                              </span>
+                              {entry.label && (
+                                <span className="text-slate-400 not-italic font-normal">
+                                  — {entry.label}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                              {entry.tags?.map((tag) => (
+                                <span
+                                  key={tag}
+                                  className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 font-medium"
+                                >
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
                         ) : (
+                          /* Standard Text or OCR Document */
                           <>
                             <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
                               {entry.type === "text"
