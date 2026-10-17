@@ -56,9 +56,18 @@ export default function App() {
     recognizer.interimResults = true;
     recognizer.lang = "en-US";
 
-    recognizer.onstart = () => setIsListening(true);
-    recognizer.onend = () => setIsListening(false);
-    recognizer.onerror = () => setIsListening(false);
+    recognizer.onstart = () => {
+      setIsListening(true);
+    };
+
+    recognizer.onend = () => {
+      setIsListening(false);
+    };
+
+    recognizer.onerror = (e) => {
+      console.debug("Speech recognition error:", e.error);
+      setIsListening(false);
+    };
 
     recognizer.onresult = async (e) => {
       const transcript = Array.from(e.results)
@@ -73,10 +82,14 @@ export default function App() {
       setIsSearching(true);
 
       try {
-        // Instant top-confidence hit using fastSearch (local rules + LLM intent refinement)
-        const bestHit = await fastSearch(transcript);
+        // Instant top-confidence hit using fastSearch (progressive: immediate local hit, then refinement)
+        const bestHit = await fastSearch(transcript, (instantHit) => {
+          // Immediately display instant hit without waiting for worker/LLM
+          setFilteredEntries([instantHit]);
+          setIsSearching(false);
+        });
+
         if (bestHit) {
-          // Immediately display ONLY the single most confident match
           setFilteredEntries([bestHit]);
         } else {
           setFilteredEntries([]);
@@ -94,8 +107,30 @@ export default function App() {
       alert("Voice recognition not supported in this browser.");
       return;
     }
-    if (isListening) recognizerRef.current.stop();
-    else recognizerRef.current.start();
+
+    if (isListening) {
+      setIsListening(false);
+      try {
+        recognizerRef.current.stop();
+      } catch (err) {
+        // Ignore if already stopped
+      }
+    } else {
+      // Immediate optimistic visual feedback (<1ms)
+      setIsListening(true);
+      setVoiceTranscript("");
+      try {
+        recognizerRef.current.start();
+      } catch (err) {
+        // If already starting or in an invalid state, abort and restart cleanly
+        try {
+          recognizerRef.current.abort();
+          recognizerRef.current.start();
+        } catch (e) {
+          setIsListening(false);
+        }
+      }
+    }
   };
 
   const clearVoiceSearch = () => {
@@ -243,9 +278,9 @@ export default function App() {
     });
 
   const extractTagsFromText = (text) => {
-    if (!text) return ["#image"];
+    if (!text || !text.trim()) return ["#image", "#photo"];
     const tags = deriveTags(text);
-    return tags.length > 0 ? tags : ["#image"];
+    return tags.length > 0 ? Array.from(new Set([...tags, "#image"])) : ["#image", "#photo"];
   };
 
   const handleImageCapture = async (e) => {
@@ -370,19 +405,19 @@ export default function App() {
           )}
 
           {isListening && (
-            <div className="absolute inset-0 -m-3 rounded-full bg-indigo-500/20 blur-xl animate-ping pointer-events-none" />
+            <div className="absolute inset-0 -m-2 rounded-full bg-rose-500/25 blur-md animate-pulse pointer-events-none" />
           )}
           <button
             onClick={toggleListening}
-            className={`relative z-10 w-28 h-28 rounded-full flex flex-col items-center justify-center transition-all duration-300 shadow-2xl active:scale-95 ${
+            className={`relative z-10 w-28 h-28 rounded-full flex flex-col items-center justify-center transition-transform duration-100 shadow-2xl active:scale-95 select-none ${
               isListening
-                ? "bg-rose-600 shadow-rose-500/30 scale-105 ring-4 ring-rose-500/30"
+                ? "bg-rose-600 shadow-rose-600/40 ring-4 ring-rose-500/40 scale-105"
                 : "bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/30 ring-4 ring-indigo-500/20"
             }`}
             aria-label="Activate voice search"
           >
-            <span className="text-3xl mb-1">{isListening ? "🛑" : "🎙️"}</span>
-            <span className="text-[10px] font-semibold tracking-wider uppercase text-white/90">
+            <span className="text-3xl mb-1 select-none">{isListening ? "🛑" : "🎙️"}</span>
+            <span className="text-[10px] font-semibold tracking-wider uppercase text-white/90 select-none">
               {isListening ? "Listening" : "Tap to Ask"}
             </span>
           </button>
