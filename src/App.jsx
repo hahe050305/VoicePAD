@@ -22,9 +22,14 @@ export default function App() {
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState("");
   const [editLabel, setEditLabel] = useState("");
+  const [editingError, setEditingError] = useState("");
 
   // Zoom modal state — entry selected by clicking a card
   const [selectedEntry, setSelectedEntry] = useState(null);
+
+  // Top-right label reminder popup for newly uploaded unlabeled images
+  const [showLabelReminder, setShowLabelReminder] = useState(false);
+  const reminderTimerRef = useRef(null);
 
   const recognizerRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -44,7 +49,10 @@ export default function App() {
     const unsub = subscribeLLMStatus(setLlmStatus);
     // Initialize LLM in the background
     initLLM();
-    return () => unsub();
+    return () => {
+      unsub();
+      if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);
+    };
   }, [loadEntries]);
 
   // ── Voice recognition ────────────────────────────────────────────────────────
@@ -71,37 +79,44 @@ export default function App() {
       setIsListening(false);
     };
 
-    recognizer.onresult = async (e) => {
-      const transcript = Array.from(e.results)
-        .map((r) => r[0].transcript)
-        .join(" ");
+    recognizer.onresult = (e) => {
+      // 1. Immediately extract latest spoken words (interim + final)
+      let currentTranscript = "";
+      for (let i = 0; i < e.results.length; i++) {
+        currentTranscript += e.results[i][0].transcript + " ";
+      }
+      currentTranscript = currentTranscript.trim();
 
-      // Update the Instagram Notes-style voice bubble floater
-      setVoiceTranscript(transcript);
+      if (!currentTranscript) return;
+
+      // 2. Zero-latency instant visual reflection in the Instagram Notes floater bubble
+      setVoiceTranscript(currentTranscript);
       setSearchMode("voice");
 
+      // 3. Debounce background search so fast ongoing speaking does not thrash, but search begins instantly
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
       setIsSearching(true);
 
-      try {
-        // fastSearch returns an array for photo-family queries, or a single object otherwise
-        const result = await fastSearch(transcript, (instantHit) => {
-          if (instantHit) {
-            const hits = Array.isArray(instantHit) ? instantHit : [instantHit];
-            setFilteredEntries(hits);
-            setIsSearching(false);
-          }
-        });
+      searchDebounceRef.current = setTimeout(async () => {
+        try {
+          const result = await fastSearch(currentTranscript, (instantHit) => {
+            if (instantHit) {
+              const hits = Array.isArray(instantHit) ? instantHit : [instantHit];
+              setFilteredEntries(hits);
+              setIsSearching(false);
+            }
+          });
 
-        if (result) {
-          const hits = Array.isArray(result) ? result : [result];
-          setFilteredEntries(hits);
-        } else {
-          setFilteredEntries([]);
+          if (result) {
+            const hits = Array.isArray(result) ? result : [result];
+            setFilteredEntries(hits);
+          } else {
+            setFilteredEntries([]);
+          }
+        } finally {
+          setIsSearching(false);
         }
-      } finally {
-        setIsSearching(false);
-      }
+      }, 60);
     };
 
     recognizerRef.current = recognizer;
@@ -228,6 +243,7 @@ export default function App() {
     setEditingId(entry.id);
     setEditText(entry.type === "text" ? entry.content || "" : entry.ocr || "");
     setEditLabel(entry.label || "");
+    setEditingError("");
   };
 
   const cancelEditing = (e) => {
@@ -235,6 +251,7 @@ export default function App() {
     setEditingId(null);
     setEditText("");
     setEditLabel("");
+    setEditingError("");
   };
 
   const handleSaveEdit = async (entry, e) => {
@@ -243,9 +260,10 @@ export default function App() {
     const updatedLabel = editLabel.trim();
 
     if (!updatedText && !updatedLabel) {
-      alert("Text or label cannot be empty.");
+      setEditingError("Text or label cannot be empty.");
       return;
     }
+    setEditingError("");
 
     if (entry.type === "text") {
       const updatedTags = deriveTags(updatedText);
@@ -332,6 +350,12 @@ export default function App() {
       // Reset file input so user can pick again immediately
       if (fileInputRef.current) fileInputRef.current.value = "";
 
+      // 4. Trigger top-right reminder popup on every unlabelled image after a few seconds
+      if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);
+      reminderTimerRef.current = setTimeout(() => {
+        setShowLabelReminder(true);
+      }, 2500);
+
       // 4. Run OCR pipeline SILENTLY in the background without blocking or showing progress
       (async () => {
         for (let i = 0; i < files.length; i++) {
@@ -390,6 +414,50 @@ export default function App() {
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center px-4 py-8 antialiased selection:bg-indigo-500 selection:text-white">
+      {/* Top-Right Notification: Appears on every unlabelled image upload after a few seconds */}
+      {showLabelReminder && (
+        <div className="fixed top-5 right-5 z-50 max-w-sm animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="bg-slate-900/95 border border-amber-500/50 shadow-2xl rounded-2xl p-3.5 backdrop-blur-md flex items-start gap-3 text-slate-100">
+            <span className="text-xl shrink-0 mt-0.5">🏷️</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold text-amber-300">
+                Unlabeled image uploaded
+              </p>
+              <p className="text-[11px] text-slate-300 mt-0.5 leading-snug">
+                Add a quick label (e.g. "Selfie", "License") so voice search retrieves it with 100% precision!
+              </p>
+              <div className="flex items-center gap-2 mt-2">
+                <button
+                  onClick={() => {
+                    const firstUnlabeled = allEntries.find((e) => e.type === "image" && !e.label);
+                    if (firstUnlabeled) {
+                      startEditing(firstUnlabeled);
+                    }
+                    setShowLabelReminder(false);
+                  }}
+                  className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-lg text-[11px] font-semibold transition shadow"
+                >
+                  Label Now
+                </button>
+                <button
+                  onClick={() => setShowLabelReminder(false)}
+                  className="px-2 py-1 text-[11px] text-slate-400 hover:text-slate-200 transition"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowLabelReminder(false)}
+              className="text-slate-500 hover:text-slate-300 text-xs p-1"
+              aria-label="Close reminder"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="w-full max-w-xl flex items-center justify-between pb-6 border-b border-slate-800/80 mb-8">
         <div>
@@ -650,11 +718,19 @@ export default function App() {
                                 : "📷 OCR"
                               : "📝 Note"}
                           </span>
-                          {entry.label && (
+                          {entry.label ? (
                             <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/40 text-indigo-300 flex items-center gap-1">
                               🏷️ {entry.label}
                             </span>
-                          )}
+                          ) : entry.type === "image" ? (
+                            <button
+                              onClick={(e) => startEditing(entry, e)}
+                              className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-600/40 text-amber-300 hover:bg-amber-900/90 transition flex items-center gap-1"
+                              title="Click to add a label for instant search"
+                            >
+                              🏷️ + Label
+                            </button>
+                          ) : null}
                         </div>
 
                         {/* Inline Edit Form OR Card Content */}
@@ -718,6 +794,11 @@ export default function App() {
                                 Cancel
                               </button>
                             </div>
+                            {editingError && (
+                              <p className="text-[11px] text-rose-400 mt-1 font-medium animate-in fade-in">
+                                ⚠️ {editingError}
+                              </p>
+                            )}
                           </div>
                         ) : isPureImage ? (
                           /* Pure Image: hide the OCR text, display the image alone with "Image placeholder" */
