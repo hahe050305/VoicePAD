@@ -16,14 +16,15 @@ export default function App() {
   const [isListening, setIsListening] = useState(false);
   const [manualNote, setManualNote] = useState("");
   const [autoTags, setAutoTags] = useState([]);
-  const [isProcessingImage, setIsProcessingImage] = useState(false);
-  const [ocrProgress, setOcrProgress] = useState(0);
   const [llmStatus, setLlmStatus] = useState({ state: "idle", progress: 0 });
 
   // In-card editing state
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState("");
   const [editLabel, setEditLabel] = useState("");
+
+  // Zoom modal state — entry selected by clicking a card
+  const [selectedEntry, setSelectedEntry] = useState(null);
 
   const recognizerRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -83,16 +84,18 @@ export default function App() {
       setIsSearching(true);
 
       try {
-        // Return ONLY the single most confident match instantly without handing lists
-        const bestHit = await fastSearch(transcript, (instantHit) => {
+        // fastSearch returns an array for photo-family queries, or a single object otherwise
+        const result = await fastSearch(transcript, (instantHit) => {
           if (instantHit) {
-            setFilteredEntries([instantHit]);
+            const hits = Array.isArray(instantHit) ? instantHit : [instantHit];
+            setFilteredEntries(hits);
             setIsSearching(false);
           }
         });
 
-        if (bestHit) {
-          setFilteredEntries([bestHit]);
+        if (result) {
+          const hits = Array.isArray(result) ? result : [result];
+          setFilteredEntries(hits);
         } else {
           setFilteredEntries([]);
         }
@@ -300,68 +303,65 @@ export default function App() {
   };
 
   const handleImageCapture = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
 
     try {
-      setIsProcessingImage(true);
-      setOcrProgress(5);
+      // 1. Instantly read all files to data URLs
+      const dataUrls = await Promise.all(files.map((file) => readFileAsDataUrl(file)));
 
-      const dataUrl = await readFileAsDataUrl(file);
-      const ocrResult = await performOCR(file, setOcrProgress);
-      const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult.text || "");
-      const isPure = typeof ocrResult === "object" ? ocrResult.isPureImage : isPureImageText(extractedText);
-
-      // Disambiguation prompt for blurry or pure image uploads
-      let manualLabel = "";
-      let manualLabelTags = [];
-      const ocrClean = (extractedText || "").trim();
-      const isBlurredOrEmpty = isPure || ocrClean.length < 15;
-
-      if (isBlurredOrEmpty) {
-        const userInput = window.prompt(
-          "No clear text detected. Please label this image so voice search finds it instantly (e.g. Aadhaar, PAN, License Plate, Photo):"
-        );
-        if (userInput && userInput.trim()) {
-          manualLabel = userInput.trim();
-          const normalized = manualLabel.toLowerCase().replace(/[^a-z0-9]/g, "_");
-          const derived = deriveTags(manualLabel);
-          manualLabelTags = [
-            `#label_${normalized}`,
-            `#${normalized}`,
-            ...derived,
-          ];
-        }
-      }
-
-      const autoTags = extractTagsFromText(extractedText);
-      const combinedTags = Array.from(
-        new Set([...manualLabelTags, ...autoTags, "#image", ...(isPure ? ["#photo", "#selfie"] : [])])
-      );
-
-      const newImageEntry = {
+      // 2. Prepare immediate image entries with default photo tags
+      const newEntries = dataUrls.map((dataUrl, i) => ({
         id: crypto.randomUUID(),
         type: "image",
         blobUrl: dataUrl,
-        label: manualLabel,
-        ocr: isPure ? "" : extractedText,
-        isPureImage: isPure,
-        tags: combinedTags,
-        timestamp: Date.now(),
-      };
+        label: "",
+        ocr: "",
+        isPureImage: true, // Default to true so it renders instantly as a photo placeholder
+        tags: ["#image", "#photo"],
+        timestamp: Date.now() + i,
+      }));
 
-      await db.images.add(newImageEntry);
+      // 3. Immediately store to database and update UI
+      await db.images.bulkAdd(newEntries);
       const updated = await refreshCache();
       const sorted = [...updated].sort((a, b) => b.timestamp - a.timestamp);
       setAllEntries(sorted);
       setFilteredEntries(sorted.slice(0, 20));
-    } catch (err) {
-      console.error("OCR failed:", err);
-      alert("Error recognizing text. Please try again.");
-    } finally {
-      setIsProcessingImage(false);
-      setOcrProgress(0);
+
+      // Reset file input so user can pick again immediately
       if (fileInputRef.current) fileInputRef.current.value = "";
+
+      // 4. Run OCR pipeline SILENTLY in the background without blocking or showing progress
+      (async () => {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const entry = newEntries[i];
+          try {
+            const ocrResult = await performOCR(file);
+            const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult.text || "");
+            const isPure = typeof ocrResult === "object" ? ocrResult.isPureImage : isPureImageText(extractedText);
+
+            const autoTags = extractTagsFromText(extractedText);
+            const combinedTags = Array.from(
+              new Set([...autoTags, "#image", "#photo"])
+            );
+
+            await db.images.update(entry.id, {
+              ocr: isPure ? "" : extractedText,
+              isPureImage: isPure,
+              tags: combinedTags,
+            });
+          } catch (err) {
+            console.debug("Silent background OCR failed for image:", err);
+          }
+        }
+        // Refresh cache in background once OCR pipeline completes
+        await refreshCache();
+      })();
+    } catch (err) {
+      console.error("Instant image upload failed:", err);
+      alert("Error adding images. Please try again.");
     }
   };
 
@@ -398,7 +398,7 @@ export default function App() {
             Voicepad
           </h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            Instant micro-memory scratchpad
+            Instant 
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -464,50 +464,24 @@ export default function App() {
           </button>
         </div>
 
-        {/* Image Capture */}
+        {/* Image Capture — supports instant multiple image selection */}
         <div className="w-full flex items-center justify-center gap-3 my-2">
           <input
             ref={fileInputRef}
             type="file"
             accept="image/*"
-            capture="environment"
+            multiple
             className="hidden"
             onChange={handleImageCapture}
-            disabled={isProcessingImage}
           />
           <button
             onClick={() => fileInputRef.current?.click()}
-            disabled={isProcessingImage}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-medium border transition shadow-sm ${
-              isProcessingImage
-                ? "bg-slate-800/60 border-slate-700 text-slate-400 cursor-not-allowed"
-                : "bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-slate-700 text-slate-200 active:scale-95"
-            }`}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-medium border transition shadow-sm bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-slate-700 text-slate-200 active:scale-95"
           >
             <span className="text-base">📷</span>
-            <span>
-              {isProcessingImage
-                ? `Scanning OCR (${ocrProgress}%)`
-                : "Snap / Upload Image"}
-            </span>
+            <span>Snap / Upload Images</span>
           </button>
         </div>
-
-        {/* OCR Progress */}
-        {isProcessingImage && (
-          <div className="w-full mt-2 mb-3 bg-slate-900 border border-slate-800 rounded-lg p-2.5">
-            <div className="flex justify-between text-[11px] text-slate-400 mb-1 font-mono">
-              <span>Extracting text locally via Tesseract...</span>
-              <span>{ocrProgress}%</span>
-            </div>
-            <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
-              <div
-                className="bg-indigo-500 h-full transition-all duration-300 rounded-full"
-                style={{ width: `${ocrProgress}%` }}
-              />
-            </div>
-          </div>
-        )}
 
         {/* Search Bar — manual text filter */}
         <form onSubmit={handleSearchSubmit} className="w-full mt-4">
@@ -589,7 +563,7 @@ export default function App() {
               {searchMode === "voice" && voiceTranscript.trim() ? (
                 <>
                   <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                  Top Voice Match
+                  {filteredEntries.length > 1 ? `Your Photos (${filteredEntries.length})` : "Top Voice Match"}
                 </>
               ) : query.trim() ? (
                 "Best Matches"
@@ -652,7 +626,8 @@ export default function App() {
                 return (
                   <div
                     key={entry.id}
-                    className="p-3.5 bg-slate-900/70 border border-slate-800/80 hover:border-slate-700 rounded-xl transition flex flex-col gap-2.5 shadow-sm"
+                    onClick={() => !isEditing && setSelectedEntry(entry)}
+                    className="p-3.5 bg-slate-900/70 border border-slate-800/80 hover:border-slate-700 rounded-xl transition flex flex-col gap-2.5 shadow-sm cursor-pointer"
                   >
                     <div className="flex items-start justify-between gap-3">
                       {/* For text-bearing images, show small thumbnail on the left */}
@@ -832,6 +807,109 @@ export default function App() {
           )}
         </section>
       </main>
+
+      {/* ── Zoom Modal — full-screen card overlay ─────────────────────────── */}
+      {selectedEntry && (() => {
+        const modalEntry = selectedEntry;
+        const modalPure =
+          modalEntry.type === "image" &&
+          (modalEntry.isPureImage === true || (!modalEntry.ocr && !modalEntry.label) || isPureImageText(modalEntry.ocr));
+
+        return (
+          <div
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setSelectedEntry(null)}
+          >
+            <div
+              className="relative bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Close button */}
+              <button
+                onClick={() => setSelectedEntry(null)}
+                className="absolute top-3 right-3 z-10 w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition"
+                aria-label="Close"
+              >
+                ✕
+              </button>
+
+              {/* Type & Label badges */}
+              <div className="flex items-center gap-2 mb-3 flex-wrap pr-10">
+                <span className="text-[11px] font-mono uppercase px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+                  {modalEntry.type === "image"
+                    ? modalPure
+                      ? "🖼️ Image"
+                      : "📷 OCR"
+                    : "📝 Note"}
+                </span>
+                {modalEntry.label && (
+                  <span className="text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/40 text-indigo-300 flex items-center gap-1">
+                    🏷️ {modalEntry.label}
+                  </span>
+                )}
+                <span className="text-[10px] text-slate-500 font-mono ml-auto">
+                  {formatTime(modalEntry.timestamp)}
+                </span>
+              </div>
+
+              {/* Content */}
+              {modalEntry.type === "image" ? (
+                <div className="space-y-3">
+                  <div className="w-full rounded-xl overflow-hidden bg-slate-950 border border-slate-800/90 flex items-center justify-center p-1">
+                    <img
+                      src={modalEntry.blobUrl}
+                      alt={modalEntry.label || "Image"}
+                      className="max-h-[60vh] w-auto object-contain rounded-lg"
+                    />
+                  </div>
+                  {!modalPure && modalEntry.ocr && (
+                    <div className="bg-slate-950/70 rounded-lg p-3 border border-slate-800">
+                      <p className="text-[10px] text-slate-500 uppercase font-semibold mb-1">Extracted Text</p>
+                      <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
+                        {modalEntry.ocr}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-base text-slate-100 leading-relaxed whitespace-pre-wrap">
+                  {modalEntry.content}
+                </p>
+              )}
+
+              {/* Tags */}
+              {modalEntry.tags && modalEntry.tags.length > 0 && (
+                <div className="flex items-center gap-1.5 mt-4 flex-wrap">
+                  {modalEntry.tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 font-medium"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Actions inside modal */}
+              <div className="flex items-center gap-2 mt-4 pt-3 border-t border-slate-800">
+                <button
+                  onClick={(e) => { startEditing(modalEntry, e); setSelectedEntry(null); }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium transition"
+                >
+                  ✏️ Edit
+                </button>
+                <button
+                  onClick={(e) => { handleDeleteEntry(modalEntry, e); setSelectedEntry(null); }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-rose-900/80 text-slate-200 hover:text-rose-200 rounded-lg text-xs font-medium transition"
+                >
+                  🗑️ Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

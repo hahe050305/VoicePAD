@@ -81,9 +81,12 @@ function scoreEntry(entry, tokens, rawLower, llmIntent = null) {
 
   if (isPure) {
     effectiveTags.add("#photo");
-    effectiveTags.add("#selfie");
     effectiveTags.add("#image");
     effectiveTags.add("#picture");
+    // Note: #selfie is NOT force-added — it stays only if the entry was
+    // originally tagged as selfie, so "selfie" queries still match all photos
+    // (they are treated as a photo-family query below) while preserving the
+    // distinction for future per-entry selfie labeling.
   }
 
   // 1. Exact full-phrase match against text/label (highest signal)
@@ -128,17 +131,23 @@ function scoreEntry(entry, tokens, rawLower, llmIntent = null) {
 
   // 6. Photo & Selfie Intent Match
   const isPhotoQuery = tokens.some((t) =>
-    ["#photo", "#selfie", "selfie", "photo", "picture", "pic", "pics", "portrait", "snap"].includes(t)
+    [
+      "#photo", "#selfie", "#image", "#picture",
+      "selfie", "selfies", "photo", "photos",
+      "picture", "pictures", "pic", "pics",
+      "portrait", "portraits", "snap", "snaps",
+      "image", "images", "gallery", "camera"
+    ].includes(t)
   );
 
   if (isPhotoQuery) {
-    if (isPure) {
-      // Pure photograph / selfie match
-      score += 30;
+    if (entry.type === "image") {
+      // Any uploaded image is a match for "photo"
+      score += isPure ? 35 : 25;
     } else {
-      // Non-photo document or text note: DISQUALIFY from matching photo/selfie queries
-      // unless the text explicitly contains the word "selfie" or "photo"
-      const hasExplicit = fullText.includes("selfie") || fullText.includes("photo") || fullText.includes("portrait");
+      // Non-image note: DISQUALIFY from matching photo/selfie queries
+      // unless the text explicitly mentions photo or selfie
+      const hasExplicit = fullText.includes("selfie") || fullText.includes("photo") || fullText.includes("portrait") || fullText.includes("picture");
       if (!hasExplicit) {
         return 0; // Immediate 0 score
       }
@@ -204,14 +213,40 @@ export async function rankedSearch(rawQuery, llmIntent = null) {
 
 /**
  * Fast search used for voice lookup:
- * Returns ONLY the single highest-confidence match (no candidate lists).
+ * - For photo-family queries (photo, selfie, picture, snap, etc.),
+ *   returns ALL matching photos so the user sees their full gallery.
+ * - For other queries, returns ONLY the single highest-confidence match.
  * 1. Instant local response (<2ms) via aliasMap & rule-matching.
  * 2. Background LLM refinement within a strict deadline.
  */
+const PHOTO_FAMILY_WORDS = new Set([
+  "photo", "photos", "selfie", "selfies", "picture", "pictures",
+  "pic", "pics", "portrait", "portraits", "snap", "snaps", "image", "images",
+  "gallery", "camera", "#photo", "#selfie", "#image", "#picture"
+]);
+
 export async function fastSearch(rawQuery, onProgressHit = null) {
   const initialRanked = await rankedSearch(rawQuery);
   if (initialRanked.length === 0) return null;
 
+  // Detect if this is a photo-family query (check words, tokens, and raw query)
+  const queryLower = (rawQuery || "").toLowerCase();
+  const queryWords = queryLower.replace(/[^\w\s#]/g, " ").split(/\s+/).filter(Boolean);
+  const normalizedTokens = normalizeQuery(rawQuery);
+  const isPhotoFamilyQuery =
+    queryWords.some((w) => PHOTO_FAMILY_WORDS.has(w)) ||
+    normalizedTokens.some((t) => PHOTO_FAMILY_WORDS.has(t)) ||
+    /\b(photo|photos|selfie|selfies|picture|pictures|pic|pics|portrait|snap|snaps|image|images)\b/i.test(queryLower);
+
+  if (isPhotoFamilyQuery) {
+    // Return ALL matching photos (rankedSearch already filtered to score > 0)
+    if (typeof onProgressHit === "function") {
+      onProgressHit(initialRanked); // send array of all matches
+    }
+    return initialRanked;
+  }
+
+  // Non-photo query: single best hit
   let bestHit = initialRanked[0];
 
   // If initial hit is available, notify caller immediately
@@ -237,3 +272,4 @@ export async function fastSearch(rawQuery, onProgressHit = null) {
 
   return bestHit;
 }
+
