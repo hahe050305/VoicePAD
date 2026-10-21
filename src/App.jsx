@@ -5,6 +5,7 @@ import { rankedSearch, fastSearch, refreshCache } from "./search.js";
 import { performOCR, isPureImageText } from "./ocr.js";
 import { deriveTags } from "./tagger.js";
 import { initLLM, subscribeLLMStatus } from "./llmService.js";
+import { getDetectedLabelsAndTags } from "./services/visionService.js";
 
 export default function App() {
   const [query, setQuery] = useState("");
