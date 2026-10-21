@@ -1,16 +1,5 @@
 // src/services/visionService.js
 // In-browser Vision Object Detection pipeline via Transformers.js
-import {
-  AutoModelForObjectDetection,
-  AutoProcessor,
-  ObjectDetectionPipeline,
-  env,
-} from "@huggingface/transformers";
-
-// Use browser cache (Cache API / IndexedDB) and avoid local file system attempts
-env.allowLocalModels = false;
-env.useBrowserCache = true;
-
 let detector = null;
 let isLoading = false;
 let initPromise = null;
@@ -134,6 +123,18 @@ export async function getDetector(onProgress) {
   initPromise = (async () => {
     isLoading = true;
     try {
+      // Keep the large Transformers.js bundle out of the app's initial load.
+      const {
+        AutoModelForObjectDetection,
+        AutoProcessor,
+        ObjectDetectionPipeline,
+        env,
+      } = await import("@huggingface/transformers");
+
+      // Use browser cache (Cache API / IndexedDB) and avoid local file system attempts.
+      env.allowLocalModels = false;
+      env.useBrowserCache = true;
+
       const modelId = "Xenova/yolos-tiny";
       const progress_callback = (p) => {
         if (typeof onProgress === "function") {
