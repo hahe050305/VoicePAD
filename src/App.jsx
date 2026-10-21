@@ -359,33 +359,51 @@ export default function App() {
 
       // 4. Run OCR pipeline SILENTLY in the background without blocking or showing progress
       (async () => {
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    const entry = newEntries[i];
-    try {
-      // Run OCR & YOLO concurrently in background
-      const [ocrResult, visionResult] = await Promise.all([
-        performOCR(file).catch(() => ""),
-        getDetectedLabelsAndTags(file).catch(() => ({ labels: [], tags: [], detections: [] })),
-      ]);
-      const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
-      const isPure = typeof ocrResult === "object" ? ocrResult.isPureImage : isPureImageText(extractedText);
-      const textTags = extractTagsFromText(extractedText);
-      const combinedTags = Array.from(
-        new Set([...textTags, ...visionResult.tags, "#image", "#photo"])
-      );
-      await db.images.update(entry.id, {
-        ocr: isPure ? "" : extractedText,
-        isPureImage: isPure,
-        detectedObjects: visionResult.labels, // e.g. ["car"] or ["potted plant"]
-        tags: combinedTags,
-      });
-    } catch (err) {
-      console.debug("Silent background processing failed:", err);
-    }
-  }
-  await refreshCache();
-})();
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const entry = newEntries[i];
+          const dataUrl = dataUrls[i];
+          try {
+            console.log(`[Vision] Processing image ${i + 1}/${files.length}...`);
+            // Run OCR & Object Detection concurrently using dataUrl
+            const [ocrResult, visionResult] = await Promise.all([
+              performOCR(file).catch((err) => {
+                console.warn("[Vision] OCR error:", err);
+                return "";
+              }),
+              getDetectedLabelsAndTags(dataUrl).catch((err) => {
+                console.warn("[Vision] Vision detection error:", err);
+                return { labels: [], tags: [], detections: [] };
+              }),
+            ]);
+            console.log("[Vision] Results -> labels:", visionResult.labels, "tags:", visionResult.tags);
+            const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
+            const isPure = typeof ocrResult === "object" ? ocrResult.isPureImage : isPureImageText(extractedText);
+            const textTags = extractTagsFromText(extractedText);
+            const combinedTags = Array.from(
+              new Set([...textTags, ...visionResult.tags, "#image", "#photo"])
+            );
+            await db.images.update(entry.id, {
+              ocr: isPure ? "" : extractedText,
+              isPureImage: isPure,
+              detectedObjects: visionResult.labels,
+              tags: combinedTags,
+            });
+          } catch (err) {
+            console.error("[Vision] Silent background processing failed:", err);
+          }
+        }
+        // Re-sync UI state so the new tags immediately appear on the cards!
+        const updated = await refreshCache();
+        const sorted = [...updated].sort((a, b) => b.timestamp - a.timestamp);
+        setAllEntries(sorted);
+        if (query.trim()) {
+          const ranked = await rankedSearch(query);
+          setFilteredEntries(ranked.slice(0, 20));
+        } else {
+          setFilteredEntries(sorted.slice(0, 20));
+        }
+      })();
     } catch (err) {
       console.error("Instant image upload failed:", err);
       alert("Error adding images. Please try again.");
