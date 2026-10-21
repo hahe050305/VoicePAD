@@ -4,7 +4,15 @@
 let worker = null;
 let statusListeners = new Set();
 let pendingRequests = new Map();
-let currentStatus = { state: "idle", progress: 0 }; // idle | loading | ready | error
+
+// Check if model was already cached in previous sessions
+const isModelCached = typeof window !== "undefined" && localStorage.getItem("voicepad_llm_cached") === "true";
+
+let currentStatus = {
+  state: isModelCached ? "cached_loading" : "idle",
+  progress: isModelCached ? 100 : 0,
+  isCached: isModelCached,
+}; // idle | loading | cached_loading | ready | error
 
 function getWorker() {
   if (worker) return worker;
@@ -18,9 +26,17 @@ function getWorker() {
 
     if (type === "INIT_PROGRESS") {
       const pct = total ? Math.round((loaded / total) * 100) : 0;
-      updateStatus({ state: "loading", progress: pct });
+      updateStatus({
+        state: currentStatus.isCached ? "cached_loading" : "loading",
+        progress: pct,
+      });
     } else if (type === "INIT_SUCCESS") {
-      updateStatus({ state: "ready", progress: 100 });
+      if (typeof window !== "undefined") {
+        try {
+          localStorage.setItem("voicepad_llm_cached", "true");
+        } catch (_) {}
+      }
+      updateStatus({ state: "ready", progress: 100, isCached: true });
     } else if (type === "INIT_ERROR") {
       updateStatus({ state: "error", error });
     } else if (type === "PARSE_RESULT") {
@@ -54,7 +70,9 @@ export function subscribeLLMStatus(callback) {
 
 export function initLLM() {
   const w = getWorker();
-  updateStatus({ state: "loading", progress: 0 });
+  if (!currentStatus.isCached) {
+    updateStatus({ state: "loading", progress: 0 });
+  }
   w.postMessage({ type: "INIT" });
 }
 
