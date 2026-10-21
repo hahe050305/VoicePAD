@@ -359,31 +359,33 @@ export default function App() {
 
       // 4. Run OCR pipeline SILENTLY in the background without blocking or showing progress
       (async () => {
-        for (let i = 0; i < files.length; i++) {
-          const file = files[i];
-          const entry = newEntries[i];
-          try {
-            const ocrResult = await performOCR(file);
-            const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult.text || "");
-            const isPure = typeof ocrResult === "object" ? ocrResult.isPureImage : isPureImageText(extractedText);
-
-            const autoTags = extractTagsFromText(extractedText);
-            const combinedTags = Array.from(
-              new Set([...autoTags, "#image", "#photo"])
-            );
-
-            await db.images.update(entry.id, {
-              ocr: isPure ? "" : extractedText,
-              isPureImage: isPure,
-              tags: combinedTags,
-            });
-          } catch (err) {
-            console.debug("Silent background OCR failed for image:", err);
-          }
-        }
-        // Refresh cache in background once OCR pipeline completes
-        await refreshCache();
-      })();
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const entry = newEntries[i];
+    try {
+      // Run OCR & YOLO concurrently in background
+      const [ocrResult, visionResult] = await Promise.all([
+        performOCR(file).catch(() => ""),
+        getDetectedLabelsAndTags(file).catch(() => ({ labels: [], tags: [], detections: [] })),
+      ]);
+      const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
+      const isPure = typeof ocrResult === "object" ? ocrResult.isPureImage : isPureImageText(extractedText);
+      const textTags = extractTagsFromText(extractedText);
+      const combinedTags = Array.from(
+        new Set([...textTags, ...visionResult.tags, "#image", "#photo"])
+      );
+      await db.images.update(entry.id, {
+        ocr: isPure ? "" : extractedText,
+        isPureImage: isPure,
+        detectedObjects: visionResult.labels, // e.g. ["car"] or ["potted plant"]
+        tags: combinedTags,
+      });
+    } catch (err) {
+      console.debug("Silent background processing failed:", err);
+    }
+  }
+  await refreshCache();
+})();
     } catch (err) {
       console.error("Instant image upload failed:", err);
       alert("Error adding images. Please try again.");
