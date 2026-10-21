@@ -405,7 +405,7 @@ export default function App() {
         }
       })();
     } catch (err) {
-      console.error("Instant image upload failed:", err);
+      console.error("Real‑timeimage upload failed:", err);
       alert("Error adding images. Please try again.");
     }
   };
@@ -487,13 +487,18 @@ export default function App() {
             Voicepad
           </h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            Instant 
+            Real‑time
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {llmStatus.state === "loading" && (
+                <div className="flex items-center gap-2">
+          {llmStatus.state === "loading" && !llmStatus.isCached && (
             <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-indigo-950/80 border border-indigo-700/50 text-indigo-300 animate-pulse">
-              🧠 AI Loading ({llmStatus.progress}%)
+              🧠 Downloading AI ({llmStatus.progress}%)
+            </span>
+          )}
+          {llmStatus.state === "cached_loading" && (
+            <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-indigo-950/50 border border-indigo-800/40 text-indigo-300/80">
+              ⚡ Initializing...
             </span>
           )}
           {llmStatus.state === "ready" && (
