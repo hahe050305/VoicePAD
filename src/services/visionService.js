@@ -131,10 +131,9 @@ export async function getDetector(onProgress) {
         env,
       } = await import("@huggingface/transformers");
 
-      // Use browser cache only where the Web Cache API exists. Android live reload
-      // uses an HTTP LAN origin, where CacheStorage is unavailable in WebView.
+      // Use browser cache (Cache API / IndexedDB) and avoid local file system attempts.
       env.allowLocalModels = false;
-      env.useBrowserCache = typeof caches !== "undefined";
+      env.useBrowserCache = true;
 
       const modelId = "Xenova/yolos-tiny";
       const progress_callback = (p) => {

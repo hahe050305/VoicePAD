@@ -154,10 +154,80 @@ function scoreEntry(entry, tokens, rawLower, llmIntent = null) {
     }
   }
 
+  // 6b. Aggressive Detected object match (from vision/YOLO pipeline)
+  if (entry.type === "image" && Array.isArray(entry.detectedObjects) && entry.detectedObjects.length > 0) {
+    const rawWords = (rawLower || "").replace(/[^\w\s#]/g, " ").split(/\s+/).filter(Boolean);
+    const candidateTokens = Array.from(new Set([...tokens, ...rawWords]));
+
+    candidateTokens.forEach((t) => {
+      const cleanT = t.replace(/^#/, "").toLowerCase();
+      if (!cleanT || ["photo", "image", "picture", "pictures", "photos"].includes(cleanT)) return;
+
+      entry.detectedObjects.forEach((obj) => {
+        const objLower = (obj || "").toLowerCase();
+        // Exact detected object match: massive boost (+120) to aggressively surface top match with 0 scrolling friction
+        if (objLower === cleanT) {
+          score += 120;
+        } else if (
+          (cleanT === "bike" && (objLower === "motorcycle" || objLower === "bicycle")) ||
+          (cleanT === "bicycle" && objLower === "bicycle") ||
+          (cleanT === "cycle" && (objLower === "bicycle" || objLower === "motorcycle")) ||
+          (cleanT === "motorcycle" && (objLower === "motorcycle" || objLower === "bike")) ||
+          (cleanT === "car" && (objLower === "car" || objLower === "truck" || objLower === "automobile")) ||
+          (cleanT === "truck" && (objLower === "truck" || objLower === "car")) ||
+          (cleanT === "scooter" && (objLower === "motorcycle" || objLower === "bicycle")) ||
+          (cleanT === "vehicle" && ["car", "truck", "motorcycle", "bicycle", "bus"].includes(objLower)) ||
+          (cleanT === "dog" && (objLower === "dog" || objLower === "puppy")) ||
+          (cleanT === "cat" && (objLower === "cat" || objLower === "kitten")) ||
+          (cleanT === "phone" && (objLower === "cell phone" || objLower === "cellphone")) ||
+          (cleanT === "laptop" && objLower === "laptop") ||
+          (cleanT === "bag" && (objLower === "backpack" || objLower === "handbag" || objLower === "suitcase")) ||
+          (cleanT === "bottle" && objLower === "bottle") ||
+          (cleanT === "plant" && (objLower === "potted plant" || objLower === "plant"))
+        ) {
+          score += 120;
+        } else if (objLower.includes(cleanT) || cleanT.includes(objLower)) {
+          score += 50;
+        }
+      });
+    });
+  }
+
   // 7. General text query on an unlabeled pure image:
   // If user is searching for something specific like "harish", "insurance", "bike", "wifi", "bill":
   // A pure photo that has no text and no matching label must NOT match!
-  if (isPure && !isPhotoQuery && !labelText) {
+  const hasSpecTag = tokens.some((t) => {
+    const cleanT = t.replace(/^#/, "").toLowerCase();
+    if (["photo", "image", "picture", "selfie"].includes(cleanT)) return false;
+    if (cleanT === "vehicle" && !tokens.some((x) => x.replace(/^#/, "").toLowerCase() === "vehicle")) return false;
+    return (
+      effectiveTags.has(`#${cleanT}`) ||
+      effectiveTags.has(`#label_${cleanT}`) ||
+      (t.startsWith("#") && !["#photo", "#image", "#picture", "#vehicle"].includes(t) && effectiveTags.has(t)) ||
+      (cleanT === "bike" && (effectiveTags.has("#motorcycle") || effectiveTags.has("#bicycle"))) ||
+      (cleanT === "car" && (effectiveTags.has("#truck") || effectiveTags.has("#suv")))
+    );
+  });
+
+  const hasDetObj =
+    entry.type === "image" &&
+    Array.isArray(entry.detectedObjects) &&
+    tokens.some((t) => {
+      const cleanT = t.replace(/^#/, "").toLowerCase();
+      if (!cleanT || ["photo", "image", "picture"].includes(cleanT)) return false;
+      return entry.detectedObjects.some((obj) => {
+        const o = (obj || "").toLowerCase();
+        return (
+          o === cleanT ||
+          (cleanT === "bike" && (o === "motorcycle" || o === "bicycle")) ||
+          (cleanT === "car" && (o === "truck" || o === "automobile")) ||
+          o.includes(cleanT) ||
+          cleanT.includes(o)
+        );
+      });
+    });
+
+  if (isPure && !isPhotoQuery && !labelText && !hasSpecTag && !hasDetObj) {
     return 0;
   }
 
