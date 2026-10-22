@@ -37,6 +37,9 @@ export default function App() {
   const fileInputRef = useRef(null);
   const searchDebounceRef = useRef(null);
 
+  //const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
+
   // Load initial entries
   const loadEntries = useCallback(async () => {
     await seedDemoData();
@@ -562,20 +565,38 @@ export default function App() {
         {/* Image Capture — supports instant multiple image selection */}
         <div className="w-full flex items-center justify-center gap-3 my-2">
           <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            multiple
-            className="hidden"
-            onChange={handleImageCapture}
-          />
+    ref={fileInputRef}
+    type="file"
+    accept="image/*"
+    multiple
+    className="hidden"
+    onChange={handleImageCapture}
+  />
+  <input
+    ref={cameraInputRef}
+    type="file"
+    accept="image/*"
+    capture="environment"
+    className="hidden"
+    onChange={handleImageCapture}
+  />
           <button
-            onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-medium border transition shadow-sm bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-slate-700 text-slate-200 active:scale-95"
-          >
-            <span className="text-base">📷</span>
-            <span>Snap / Upload Images</span>
-          </button>
+    type="button"
+    onClick={() => cameraInputRef.current?.click()}
+    className="flex-1 max-w-[170px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold border transition shadow-sm bg-indigo-600 hover:bg-indigo-500 border-indigo-500/40 text-white active:scale-95"
+  >
+    <span className="text-base">📸</span>
+    <span>Live Capture</span>
+  </button>
+  {/* 2. Gallery / File Upload */}
+  <button
+    type="button"
+    onClick={() => fileInputRef.current?.click()}
+    className="flex-1 max-w-[170px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-medium border transition shadow-sm bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-slate-700 text-slate-200 active:scale-95"
+  >
+    <span className="text-base">📁</span>
+    <span>Upload Photo</span>
+  </button>
         </div>
 
         {/* Search Bar — manual text filter */}
@@ -849,7 +870,10 @@ export default function App() {
                               )}
                             </div>
                             <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                              {entry.tags?.map((tag) => (
+                              {(entry.tags?.some((t) => !["#image", "#photo", "#picture", "#scooty", "#scooter", "#twowheeler", "#fourwheeler", "#automobile"].includes(t))
+                                ? entry.tags.filter((t) => !["#image", "#photo", "#picture", "#scooty", "#scooter", "#twowheeler", "#fourwheeler", "#automobile"].includes(t))
+                                : entry.tags?.filter((t) => t !== "#image")
+                              )?.map((tag) => (
                                 <span
                                   key={tag}
                                   className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 font-medium"
@@ -868,7 +892,10 @@ export default function App() {
                                 : entry.ocr || "(No readable text in image)"}
                             </p>
                             <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                              {entry.tags?.map((tag) => (
+                              {(entry.tags?.some((t) => !["#image", "#photo", "#picture", "#scooty", "#scooter", "#twowheeler", "#fourwheeler", "#automobile"].includes(t))
+                                ? entry.tags.filter((t) => !["#image", "#photo", "#picture", "#scooty", "#scooter", "#twowheeler", "#fourwheeler", "#automobile"].includes(t))
+                                : entry.tags?.filter((t) => t !== "#image")
+                              )?.map((tag) => (
                                 <span
                                   key={tag}
                                   className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 font-medium"
