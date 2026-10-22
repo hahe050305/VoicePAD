@@ -492,7 +492,7 @@ export default function App() {
         <div>
           <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-pulse"></span>
-            Voicepad
+            VoicePAD
           </h1>
           <p className="text-xs text-slate-400 mt-0.5">
             Real‑time
