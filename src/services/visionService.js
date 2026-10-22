@@ -217,25 +217,49 @@ export async function detectObjects(imageSource, threshold = 0.40) {
  * @param {number} threshold
  * @returns {Promise<{ labels: string[], tags: string[], detections: Array }>}
  */
+
+const INCIDENTAL_PROPS = new Set([
+  "chair", "dining table", "cup", "bottle", "bowl", "fork", "knife", "spoon",
+  "mouse", "keyboard", "remote", "bench", "vase", "potted plant"
+]);
+
+
 export async function getDetectedLabelsAndTags(imageSource, threshold = 0.40) {
   const detections = await detectObjects(imageSource, threshold);
+
+  const salientDetections = detections.filter((d) => {
+    const width = Math.max(0, (d.box?.xmax ?? 0) - (d.box?.xmin ?? 0));
+    const height = Math.max(0, (d.box?.ymax ?? 0) - (d.box?.ymin ?? 0));
+    const area = width * height;
+
+     if (INCIDENTAL_PROPS.has(d.label)) {
+      return area >= 0.15;
+    }
+    // High-priority subjects (cars, bikes, persons, dogs, laptops) need at least 5% coverage
+    return area >= 0.05;
+  });
+
   const uniqueLabels = [...new Set(detections.map((d) => d.label))];
   
   const derivedTags = new Set();
   uniqueLabels.forEach((label) => {
-    // Add raw label as tag
-    derivedTags.add(`#${label.replace(/\s+/g, "_")}`);
-    
+    // Add raw label as tag    
     // Add hyperlocal synonyms and category tags
     const mapped = HYPERLOCAL_COCO_TAGS[label];
     if (mapped) {
       mapped.forEach((tag) => derivedTags.add(tag));
+    }
+
+    else
+    {
+        derivedTags.add(`#${label.replace(/\s+/g, "_")}`);
+
     }
   });
 
   return {
     labels: uniqueLabels,
     tags: Array.from(derivedTags),
-    detections,
+    detections: salientDetections,
   };
 }
