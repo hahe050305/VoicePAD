@@ -110,6 +110,16 @@ export const HYPERLOCAL_COCO_TAGS = {
   "teddy bear": ["#toy", "#gift"],
   "hair drier": ["#grooming", "#appliance"],
   toothbrush: ["#grooming", "#hygiene", "#toothbrush"],
+
+    // Education & Science Posters
+  science: ["#science", "#education"],
+  experiment: ["#science", "#diy"],
+  experiments: ["#science", "#diy"],
+  diy: ["#diy", "#creative"],
+  stem: ["#science", "#education", "#stem"],
+  poster: ["#poster", "#graphic"],
+  banner: ["#poster", "#banner"],
+  kids: ["#kids", "#education"],
 };
 
 /**
