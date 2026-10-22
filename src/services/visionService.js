@@ -44,15 +44,15 @@ export const HYPERLOCAL_COCO_TAGS = {
   chair: ["#furniture", "#chair", "#seat"],
   couch: ["#furniture", "#sofa", "#couch", "#livingroom"],
   bed: ["#furniture", "#bed", "#bedroom"],
-  "dining table": ["#furniture", "#table", "#dining", "#desk"],
+  "dining table": ["#table"],
   toilet: ["#washroom", "#bathroom"],
-  bottle: ["#item", "#bottle", "#waterbottle", "#drink"],
+  bottle: ["#bottle"],
   "wine glass": ["#kitchen", "#glass", "#drink"],
-  cup: ["#kitchen", "#cup", "#mug", "#tea", "#coffee"],
+  cup: ["#cup", "#mug"],
   fork: ["#kitchen", "#cutlery", "#fork"],
   knife: ["#kitchen", "#knife", "#cutlery"],
   spoon: ["#kitchen", "#spoon", "#cutlery"],
-  bowl: ["#kitchen", "#bowl", "#dish"],
+  bowl: ["#bowl"],
   sink: ["#kitchen", "#sink", "#washbasin"],
   refrigerator: ["#kitchen", "#fridge", "#refrigerator", "#appliance"],
   microwave: ["#kitchen", "#microwave", "#oven", "#appliance"],
@@ -98,7 +98,7 @@ export const HYPERLOCAL_COCO_TAGS = {
   "hot dog": ["#food", "#snack"],
   pizza: ["#food", "#meal", "#pizza", "#dinner"],
   donut: ["#food", "#sweet", "#snack"],
-  cake: ["#food", "#sweet", "#cake", "#birthday"],
+  cake: ["#cake"],
 
   // ── 10. Street & Urban ────────────────────────────────────────────────────────
   "traffic light": ["#traffic", "#signal", "#street"],
@@ -169,7 +169,7 @@ export async function getDetector(onProgress) {
  * @param {number} threshold - Minimum confidence score (0.0 to 1.0, default: 0.28 for balanced precision/recall)
  * @returns {Promise<Array<{ label: string, score: number, box: object }>>}
  */
-export async function detectObjects(imageSource, threshold = 0.28) {
+export async function detectObjects(imageSource, threshold = 0.40) {
   try {
     const pipe = await getDetector();
     let src = imageSource;
@@ -207,7 +207,7 @@ export async function detectObjects(imageSource, threshold = 0.28) {
  * @param {number} threshold
  * @returns {Promise<{ labels: string[], tags: string[], detections: Array }>}
  */
-export async function getDetectedLabelsAndTags(imageSource, threshold = 0.28) {
+export async function getDetectedLabelsAndTags(imageSource, threshold = 0.40) {
   const detections = await detectObjects(imageSource, threshold);
   const uniqueLabels = [...new Set(detections.map((d) => d.label))];
   
