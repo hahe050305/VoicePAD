@@ -384,13 +384,17 @@ export default function App() {
             const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
             const isPure = typeof ocrResult === "object" ? ocrResult.isPureImage : isPureImageText(extractedText);
             const textTags = extractTagsFromText(extractedText);
-            const combinedTags = Array.from(
-              new Set([...textTags, ...visionResult.tags, "#image", "#photo"])
-            );
+
+            const hasSubstantialText = extractedText && extractedText.trim().length > 15;
+
+            const combinedTags = hasSubstantialText
+  ? Array.from(new Set([...textTags, "#poster", "#graphic", "#document"]))
+  : Array.from(new Set([...textTags, ...visionResult.tags, "#image", "#photo"]));
+
             await db.images.update(entry.id, {
-              ocr: isPure ? "" : extractedText,
-              isPureImage: isPure,
-              detectedObjects: visionResult.labels,
+              ocr: extractedText,
+              isPureImage: !hasSubstantialText && isPure,
+              detectedObjects: hasSubstantialText ? [] : visionResult.labels,
               tags: combinedTags,
             });
           } catch (err) {
