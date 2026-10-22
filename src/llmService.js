@@ -1,5 +1,6 @@
 // src/llmService.js
 // Interface to communicate with the background LLM Web Worker
+import { createId } from "./id.js";
 
 let worker = null;
 let statusListeners = new Set();
@@ -79,7 +80,7 @@ export function initLLM() {
 export function parseIntentWithLLM(text) {
   return new Promise((resolve, reject) => {
     const w = getWorker();
-    const id = crypto.randomUUID();
+    const id = createId();
     pendingRequests.set(id, { resolve, reject });
 
     // Set 8-second fallback timeout so the search never hangs
