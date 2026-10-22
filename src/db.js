@@ -1,5 +1,6 @@
 // src/db.js
 import Dexie from "dexie";
+import { createId } from "./id.js";
 
 export const db = new Dexie("voicepad-db");
 
@@ -16,14 +17,14 @@ export async function seedDemoData() {
     const now = Date.now();
     await db.notes.bulkAdd([
       {
-        id: crypto.randomUUID(),
+        id: createId(),
         type: "text",
         content: "Call John at 5 pm about the insurance",
         tags: ["#reminder"],
         timestamp: now - 2 * 60 * 60 * 1000,
       },
       {
-        id: crypto.randomUUID(),
+        id: createId(),
         type: "text",
         content: "Parking spot #42, license plate ABC123",
         tags: ["#vehicle"],

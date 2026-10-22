@@ -6,6 +6,7 @@ import { performOCR, isPureImageText } from "./ocr.js";
 import { deriveTags } from "./tagger.js";
 import { initLLM, subscribeLLMStatus } from "./llmService.js";
 import { getDetectedLabelsAndTags } from "./services/visionService.js";
+import { createId } from "./id.js";
 
 export default function App() {
   const [query, setQuery] = useState("");
@@ -217,7 +218,7 @@ export default function App() {
 
     const tags = deriveTags(manualNote);
     const newEntry = {
-      id: crypto.randomUUID(),
+      id: createId(),
       type: "text",
       content: manualNote.trim(),
       tags,
@@ -331,7 +332,7 @@ export default function App() {
 
       // 2. Prepare immediate image entries with default photo tags
       const newEntries = dataUrls.map((dataUrl, i) => ({
-        id: crypto.randomUUID(),
+        id: createId(),
         type: "image",
         blobUrl: dataUrl,
         label: "",
