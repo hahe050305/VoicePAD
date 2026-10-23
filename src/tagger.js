@@ -113,7 +113,7 @@ const semanticPatterns = [
   // 10-digit number → likely phone number
   { pattern: /\b[6-9]\d{9}\b/, tags: ["#contact"] },
   // 16-digit number → card number
-  { pattern: /\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b/, tags: ["#security"] },
+  { pattern: /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/, tags: ["#security"] },
   // 4-6 digit number near "pin/code/otp" (matched by pin/code patterns above)
   // IFSC: 4 letters + 7 alphanumeric
   { pattern: /\b[A-Z]{4}0[A-Z0-9]{6}\b/i, tags: ["#finance"] },

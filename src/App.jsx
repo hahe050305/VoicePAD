@@ -29,6 +29,7 @@ export default function App() {
 
   // Zoom modal state — entry selected by clicking a card
   const [selectedEntry, setSelectedEntry] = useState(null);
+  const [ocrExpandedId, setOcrExpandedId] = useState(null);
 
   // Keep the feed at the same viewport position while a card is zoomed.
   useEffect(() => {
@@ -804,30 +805,36 @@ export default function App() {
                 return (
                   <div
                     key={entry.id}
-                    onClick={() => !isEditing && setSelectedEntry(entry)}
+                    onClick={() => {
+                      if (!isEditing) {
+                        setOcrExpandedId(null);
+                        setSelectedEntry(entry);
+                      }
+                    }}
                     className="p-3.5 bg-slate-900/70 border border-slate-800/80 hover:border-slate-700 rounded-xl transition flex flex-col gap-2.5 shadow-sm cursor-pointer"
                   >
                     <div className="flex items-start justify-between gap-3">
-                      {/* For text-bearing images, show small thumbnail on the left */}
-                      {entry.type === "image" && !isPureImage && (
-                        <div className="w-12 h-12 shrink-0 rounded-lg overflow-hidden bg-slate-950 border border-slate-800 self-center">
-                          <img
-                            src={entry.blobUrl}
-                            alt="Thumb"
-                            className="w-full h-full object-cover"
-                          />
-                        </div>
-                      )}
-
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-                          <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
-                            {entry.type === "image"
-                              ? isPureImage
-                                ? "🖼️ Image"
-                                : "📷 OCR"
-                              : "📝 Note"}
-                          </span>
+                          {entry.type === "image" && !isPureImage ? (
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setOcrExpandedId((currentId) => currentId === entry.id ? null : entry.id);
+                              }}
+                              aria-expanded={ocrExpandedId === entry.id}
+                              aria-label={`${ocrExpandedId === entry.id ? "Hide" : "Show"} extracted OCR text`}
+                              title={`${ocrExpandedId === entry.id ? "Hide" : "Show"} extracted text`}
+                              className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+                            >
+                              📷 OCR {ocrExpandedId === entry.id ? "⌃" : "⌄"}
+                            </button>
+                          ) : (
+                            <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+                              {entry.type === "image" ? "🖼️ Image" : "📝 Note"}
+                            </span>
+                          )}
                           {entry.label ? (
                             <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/40 text-indigo-300 flex items-center gap-1">
                               🏷️ {entry.label}
@@ -910,27 +917,23 @@ export default function App() {
                               </p>
                             )}
                           </div>
-                        ) : isPureImage ? (
-                          /* Pure Image: hide the OCR text, display the image alone with "Image placeholder" */
+                        ) : entry.type === "image" ? (
                           <div className="mt-1 space-y-2">
-                            <div className="w-full max-h-80 rounded-xl overflow-hidden bg-slate-950 border border-slate-800/90 flex items-center justify-center p-1 group">
+                            <div className="w-full max-h-80 rounded-xl overflow-hidden bg-slate-950 border border-slate-800/90 flex items-center justify-center p-1">
                               <img
                                 src={entry.blobUrl}
-                                alt={entry.label || "Image placeholder"}
-                                className="max-h-72 w-auto object-contain rounded-lg group-hover:scale-[1.01] transition-transform duration-200"
+                                alt={entry.label || "Image"}
+                                className="max-h-72 max-w-full object-contain rounded-lg"
                               />
                             </div>
-                            <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                              <span>🖼️</span>
-                              <span className="font-medium italic text-slate-300">
-                                Image placeholder
-                              </span>
-                              {entry.label && (
-                                <span className="text-slate-400 not-italic font-normal">
-                                  — {entry.label}
-                                </span>
-                              )}
-                            </div>
+                            {!isPureImage && ocrExpandedId === entry.id && entry.ocr && (
+                              <p
+                                id={`ocr-text-${entry.id}`}
+                                className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap"
+                              >
+                                {entry.ocr}
+                              </p>
+                            )}
                             <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                               {(entry.tags?.some((t) => !["#image", "#photo", "#picture", "#scooty", "#scooter", "#twowheeler", "#fourwheeler", "#automobile"].includes(t))
                                 ? entry.tags.filter((t) => !["#image", "#photo", "#picture", "#scooty", "#scooter", "#twowheeler", "#fourwheeler", "#automobile"].includes(t))
@@ -1030,13 +1033,21 @@ export default function App() {
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-                  <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
-                  {modalEntry.type === "image"
-                    ? modalPure
-                      ? "🖼️ Image"
-                      : "📷 OCR"
-                    : "📝 Note"}
-                  </span>
+                  {modalEntry.type === "image" && !modalPure ? (
+                    <button
+                      type="button"
+                      onClick={() => setOcrExpandedId((currentId) => currentId === modalEntry.id ? null : modalEntry.id)}
+                      aria-expanded={ocrExpandedId === modalEntry.id}
+                      aria-label={`${ocrExpandedId === modalEntry.id ? "Hide" : "Show"} extracted OCR text`}
+                      className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+                    >
+                      📷 OCR {ocrExpandedId === modalEntry.id ? "⌃" : "⌄"}
+                    </button>
+                  ) : (
+                    <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+                      {modalEntry.type === "image" ? "🖼️ Image" : "📝 Note"}
+                    </span>
+                  )}
                   {modalEntry.label ? (
                     <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/40 text-indigo-300 flex items-center gap-1">
                       🏷️ {modalEntry.label}
@@ -1084,17 +1095,9 @@ export default function App() {
                       className="max-h-[68vh] w-full object-contain rounded-lg"
                     />
                   </div>
-                  {modalPure ? (
-                    <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                      <span>🖼️</span>
-                      <span className="font-medium italic text-slate-300">Image placeholder</span>
-                      {modalEntry.label && (
-                        <span className="text-slate-400 not-italic font-normal">— {modalEntry.label}</span>
-                      )}
-                    </div>
-                  ) : (
+                  {!modalPure && ocrExpandedId === modalEntry.id && modalEntry.ocr && (
                     <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
-                      {modalEntry.ocr || "(No readable text in image)"}
+                      {modalEntry.ocr}
                     </p>
                   )}
                 </div>
