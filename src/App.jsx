@@ -2,12 +2,11 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { db, seedDemoData } from "./db.js";
 import { rankedSearch, fastSearch, refreshCache } from "./search.js";
-import { performOCR, isPureImageText } from "./ocr.js";
+import { performOCR, isPureImageText, prewarmOCR } from "./ocr.js";
 import { deriveTags } from "./tagger.js";
 import { initLLM, subscribeLLMStatus } from "./llmService.js";
 import { getDetectedLabelsAndTags, prewarmDetector } from "./services/visionService.js";
 
-import { performOCR, isPureImageText, prewarmOCR } from "./ocr.js";
 import { createId } from "./id.js";
 
 export default function App() {
@@ -395,6 +394,7 @@ export default function App() {
 
       // Reset file input so user can pick again immediately
       if (fileInputRef.current) fileInputRef.current.value = "";
+      if (cameraInputRef.current) cameraInputRef.current.value = "";
 
       // 4. Trigger top-right reminder popup on every unlabelled image after a few seconds
       if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);
@@ -412,51 +412,47 @@ export default function App() {
             console.log(`[Vision] Processing image ${i + 1}/${files.length}...`);
             // Run OCR first, then detect objects.
             const ocrResult = await performOCR(file).catch((err) => {
-  console.warn("[Vision] OCR error:", err);
-  return "";
-});
+              console.warn("[Vision] OCR error:", err);
+              return "";
+            });
+            const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
+            const cleanText = extractedText.trim();
+            const words = cleanText
+              .toLowerCase()
+              .replace(/[^a-z0-9\s]/g, " ")
+              .split(/\s+/)
+              .filter((word) => word.length > 2);
+            const isTextDominant = words.length >= 3;
 
             let visionResult = { labels: [], tags: [], detections: [] };
+            if (!isTextDominant) {
+              visionResult = await getDetectedLabelsAndTags(dataUrl).catch((err) => {
+                console.warn("[Vision] Vision detection error:", err);
+                return { labels: [], tags: [], detections: [] };
+              });
+            }
 
-            if(!isTextDominant)
-            {
-                 visionResult = await getDetectedLabelsAndTags(dataUrl).catch((err) => {
-                 console.warn("[Vision] Vision detection error:", err);
-                 return { labels: [], tags: [], detections: [] };
-            })
-          };
             console.log("[Vision] Results -> labels:", visionResult.labels, "tags:", visionResult.tags);
-            // In src/App.jsx inside handleImageCapture silent processing loop:
-const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
-const cleanText = (extractedText || "").trim();
-const words = cleanText.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(w => w.length > 2);
-const isTextDominant = words.length >= 3;
+            // deriveTags uses #note as its empty-text fallback; avoid labeling
+            // every OCR-empty photo as a note.
+            const textTags = cleanText ? deriveTags(cleanText) : [];
+            const headlineWordTags = isTextDominant ? words.slice(0, 4).map((word) => `#${word}`) : [];
+            const activeVisionTags = isTextDominant
+              ? visionResult.tags.filter((tag) => ["#person", "#car", "#bike", "#laptop"].includes(tag))
+              : visionResult.tags;
+            const combinedTags = Array.from(new Set([
+              ...textTags,
+              ...headlineWordTags,
+              ...activeVisionTags,
+              ...(isTextDominant ? ["#poster", "#graphic"] : ["#photo"]),
+            ]));
 
-// 2. Extract keywords from text
-const textTags = deriveTags(cleanText);
-const headlineWordTags = isTextDominant ? words.slice(0, 4).map(w => `#${w}`) : [];
-
-// 3. If text-dominant, suppress noisy incidental vision labels (like cake/table/cup on a poster)
-const activeVisionTags = isTextDominant
-  ? visionResult.tags.filter(t => ["#person", "#car", "#bike", "#laptop"].includes(t))
-  : visionResult.tags;
-
-const combinedTags = Array.from(
-  new Set([
-    ...textTags,
-    ...headlineWordTags,
-    ...activeVisionTags,
-    ...(isTextDominant ? ["#poster", "#graphic"] : ["#photo"])
-  ])
-);
-
-// 4. Update DB - CRITICAL: Always preserve cleanText so searches match!
-await db.images.update(entry.id, {
-  ocr: cleanText,
-  isPureImage: !isTextDominant && cleanText.length === 0,
-  detectedObjects: isTextDominant ? [] : visionResult.labels,
-  tags: combinedTags,
-});
+            await db.images.update(entry.id, {
+              ocr: cleanText,
+              isPureImage: !isTextDominant && cleanText.length === 0,
+              detectedObjects: isTextDominant ? [] : visionResult.labels,
+              tags: combinedTags,
+            });
           } catch (err) {
             console.error("[Vision] Silent background processing failed:", err);
           }
@@ -471,7 +467,9 @@ await db.images.update(entry.id, {
         } else {
           setFilteredEntries(refreshedSorted.slice(0, 20));
         }
-      })();
+      })().catch((err) => {
+        console.error("[Vision] Background image processing failed:", err);
+      });
     } catch (err) {
       console.error("Real‑timeimage upload failed:", err);
       alert("Error adding images. Please try again.");

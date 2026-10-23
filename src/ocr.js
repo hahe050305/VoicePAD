@@ -18,7 +18,11 @@ async function getWorker(onProgress) {
       });
       workerInstance = worker;
       return worker;
-    })();
+    })().catch((error) => {
+      // Allow a later OCR attempt to retry if worker startup fails.
+      initPromise = null;
+      throw error;
+    });
   }
   return initPromise;
 }
@@ -67,35 +71,33 @@ export function isPureImageText(text) {
 
 async function getOcrInput(file) {
   const isGif = file?.type === "image/gif" || /\.gif$/i.test(file?.name || "");
-  if (isGif) {
-    // Keep existing GIF handling...
-  }
+  if (typeof createImageBitmap !== "function") return file;
 
-  // Pre-scale large camera photos down to max 1280px (preserves full readability while speeding up OCR by 4x-8x)
   try {
     const bitmap = await createImageBitmap(file);
     const maxDim = 1280;
-    if (bitmap.width <= maxDim && bitmap.height <= maxDim) {
+    if (!isGif && bitmap.width <= maxDim && bitmap.height <= maxDim) {
       bitmap.close();
       return file;
     }
-    const ratio = Math.min(maxDim / bitmap.width, maxDim / bitmap.height);
-    const targetWidth = Math.round(bitmap.width * ratio);
-    const targetHeight = Math.round(bitmap.height * ratio);
+    try {
+      // Explicitly rasterize GIFs to a still image; Tesseract reads only one frame.
+      const ratio = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+      const targetWidth = Math.max(1, Math.round(bitmap.width * ratio));
+      const targetHeight = Math.max(1, Math.round(bitmap.height * ratio));
+      const canvas = document.createElement("canvas");
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return file;
 
-    const canvas = document.createElement("canvas");
-    canvas.width = targetWidth;
-    canvas.height = targetHeight;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
+      ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+      const mimeType = isGif ? "image/png" : "image/jpeg";
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, mimeType, 0.85));
+      return blob || file;
+    } finally {
       bitmap.close();
-      return file;
     }
-    ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
-    bitmap.close();
-
-    const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.85));
-    return blob || file;
   } catch {
     return file;
   }
@@ -118,30 +120,34 @@ export async function prewarmOCR() {
  * @returns {Promise<{text: string, rawText: string, isPureImage: boolean, confidence: number}>}
  */
 export async function performOCR(file, onProgress) {
+  const input = await getOcrInput(file);
   // 1. Instant Hardware Native OS OCR (Chrome/Edge/Android/macOS) -> ~20ms
   if (typeof window !== "undefined" && "TextDetector" in window) {
+    let bitmap;
     try {
       const detector = new window.TextDetector();
-      const bitmap = await createImageBitmap(file);
+      bitmap = await createImageBitmap(input);
       const detections = await detector.detect(bitmap);
-      bitmap.close();
-      if (detections && detections.length > 0) {
-        const nativeText = detections.map((d) => d.rawValue || "").join(" ").trim();
+      const nativeText = (detections || []).map((d) => d.rawValue || "").join(" ").trim();
+      if (nativeText) {
         const isPure = isPureImageText(nativeText);
-        return {
-          text: isPure ? "" : nativeText,
-          rawText: nativeText,
-          isPureImage: isPure,
-          confidence: 98,
-        };
+        if (!isPure) {
+          return {
+            text: nativeText,
+            rawText: nativeText,
+            isPureImage: false,
+            confidence: 98,
+          };
+        }
       }
     } catch (e) {
       console.debug("[OCR] Native TextDetector fallback to WASM:", e);
+    } finally {
+      bitmap?.close();
     }
   }
   // 2. Fallback to pre-warmed Tesseract.js with downscaling
   const worker = await getWorker(onProgress);
-  const input = await getOcrInput(file);
   const ret = await worker.recognize(input);
   const rawText = ret?.data?.text?.trim() || "";
   const confidence = ret?.data?.confidence || 0;
