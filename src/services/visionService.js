@@ -189,6 +189,16 @@ export async function getDetector(onProgress) {
  * @param {number} threshold - Minimum confidence score (0.0 to 1.0, default: 0.28 for balanced precision/recall)
  * @returns {Promise<Array<{ label: string, score: number, box: object }>>}
  */
+
+export async function prewarmDetector() {
+  try {
+    await getDetector();
+    console.log("[Vision] Pre-warmed YOLO pipeline.");
+  } catch (err) {
+    console.debug("[Vision] Pre-warm fail:", err);
+  }
+}
+
 export async function detectObjects(imageSource, threshold = 0.40) {
   try {
     const pipe = await getDetector();

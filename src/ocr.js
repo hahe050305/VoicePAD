@@ -101,6 +101,16 @@ async function getOcrInput(file) {
   }
 }
 
+export async function prewarmOCR() {
+  try {
+    if (typeof window !== "undefined" && "TextDetector" in window) return;
+    await getWorker();
+    console.log("[OCR] Pre-warmed background worker.");
+  } catch (err) {
+    console.debug("[OCR] Pre-warm idle fail:", err);
+  }
+}
+
 /**
  * Runs OCR on an image file or blob.
  * @param {Blob | File} file
@@ -108,15 +118,34 @@ async function getOcrInput(file) {
  * @returns {Promise<{text: string, rawText: string, isPureImage: boolean, confidence: number}>}
  */
 export async function performOCR(file, onProgress) {
+  // 1. Instant Hardware Native OS OCR (Chrome/Edge/Android/macOS) -> ~20ms
+  if (typeof window !== "undefined" && "TextDetector" in window) {
+    try {
+      const detector = new window.TextDetector();
+      const bitmap = await createImageBitmap(file);
+      const detections = await detector.detect(bitmap);
+      bitmap.close();
+      if (detections && detections.length > 0) {
+        const nativeText = detections.map((d) => d.rawValue || "").join(" ").trim();
+        const isPure = isPureImageText(nativeText);
+        return {
+          text: isPure ? "" : nativeText,
+          rawText: nativeText,
+          isPureImage: isPure,
+          confidence: 98,
+        };
+      }
+    } catch (e) {
+      console.debug("[OCR] Native TextDetector fallback to WASM:", e);
+    }
+  }
+  // 2. Fallback to pre-warmed Tesseract.js with downscaling
   const worker = await getWorker(onProgress);
   const input = await getOcrInput(file);
   const ret = await worker.recognize(input);
   const rawText = ret?.data?.text?.trim() || "";
   const confidence = ret?.data?.confidence || 0;
-  // Confidence alone is too aggressive for small text on photos. Keep text
-  // when it passes the readable-text checks even if Tesseract scores it low.
   const isPure = isPureImageText(rawText);
-
   return {
     text: isPure ? "" : rawText,
     rawText,

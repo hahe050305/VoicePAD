@@ -5,7 +5,9 @@ import { rankedSearch, fastSearch, refreshCache } from "./search.js";
 import { performOCR, isPureImageText } from "./ocr.js";
 import { deriveTags } from "./tagger.js";
 import { initLLM, subscribeLLMStatus } from "./llmService.js";
-import { getDetectedLabelsAndTags } from "./services/visionService.js";
+import { getDetectedLabelsAndTags, prewarmDetector } from "./services/visionService.js";
+
+import { performOCR, isPureImageText, prewarmOCR } from "./ocr.js";
 import { createId } from "./id.js";
 
 export default function App() {
@@ -89,6 +91,10 @@ export default function App() {
     const unsub = subscribeLLMStatus(setLlmStatus);
     // Initialize LLM in the background
     initLLM();
+
+    prewarmOCR();
+    prewarmDetector();
+
     return () => {
       unsub();
       if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);
@@ -406,19 +412,23 @@ export default function App() {
             console.log(`[Vision] Processing image ${i + 1}/${files.length}...`);
             // Run OCR first, then detect objects.
             const ocrResult = await performOCR(file).catch((err) => {
-              console.warn("[Vision] OCR error:", err);
-              return "";
-            });
-            const visionResult = await getDetectedLabelsAndTags(dataUrl).catch((err) => {
-              console.warn("[Vision] Vision detection error:", err);
-              return { labels: [], tags: [], detections: [] };
-            });
+  console.warn("[Vision] OCR error:", err);
+  return "";
+});
+
+            let visionResult = { labels: [], tags: [], detections: [] };
+
+            if(!isTextDominant)
+            {
+                 visionResult = await getDetectedLabelsAndTags(dataUrl).catch((err) => {
+                 console.warn("[Vision] Vision detection error:", err);
+                 return { labels: [], tags: [], detections: [] };
+            })
+          };
             console.log("[Vision] Results -> labels:", visionResult.labels, "tags:", visionResult.tags);
             // In src/App.jsx inside handleImageCapture silent processing loop:
 const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
 const cleanText = (extractedText || "").trim();
-
-// 1. Check if the image contains substantial readable text (e.g., posters, signs, memes)
 const words = cleanText.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(w => w.length > 2);
 const isTextDominant = words.length >= 3;
 
