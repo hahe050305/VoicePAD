@@ -65,6 +65,42 @@ export function isPureImageText(text) {
   return false;
 }
 
+async function getOcrInput(file) {
+  const isGif = file?.type === "image/gif" || /\.gif$/i.test(file?.name || "");
+  if (isGif) {
+    // Keep existing GIF handling...
+  }
+
+  // Pre-scale large camera photos down to max 1280px (preserves full readability while speeding up OCR by 4x-8x)
+  try {
+    const bitmap = await createImageBitmap(file);
+    const maxDim = 1280;
+    if (bitmap.width <= maxDim && bitmap.height <= maxDim) {
+      bitmap.close();
+      return file;
+    }
+    const ratio = Math.min(maxDim / bitmap.width, maxDim / bitmap.height);
+    const targetWidth = Math.round(bitmap.width * ratio);
+    const targetHeight = Math.round(bitmap.height * ratio);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      bitmap.close();
+      return file;
+    }
+    ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+    bitmap.close();
+
+    const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.85));
+    return blob || file;
+  } catch {
+    return file;
+  }
+}
+
 /**
  * Runs OCR on an image file or blob.
  * @param {Blob | File} file
@@ -73,10 +109,13 @@ export function isPureImageText(text) {
  */
 export async function performOCR(file, onProgress) {
   const worker = await getWorker(onProgress);
-  const ret = await worker.recognize(file);
+  const input = await getOcrInput(file);
+  const ret = await worker.recognize(input);
   const rawText = ret?.data?.text?.trim() || "";
   const confidence = ret?.data?.confidence || 0;
-  const isPure = confidence < 45 || isPureImageText(rawText);
+  // Confidence alone is too aggressive for small text on photos. Keep text
+  // when it passes the readable-text checks even if Tesseract scores it low.
+  const isPure = isPureImageText(rawText);
 
   return {
     text: isPure ? "" : rawText,

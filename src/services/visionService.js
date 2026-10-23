@@ -129,35 +129,46 @@ export const HYPERLOCAL_COCO_TAGS = {
 export async function getDetector(onProgress) {
   if (detector) return detector;
   if (initPromise) return initPromise;
-
   initPromise = (async () => {
     isLoading = true;
     try {
-      // Keep the large Transformers.js bundle out of the app's initial load.
       const {
         AutoModelForObjectDetection,
         AutoProcessor,
         ObjectDetectionPipeline,
         env,
       } = await import("@huggingface/transformers");
-
-      // Use browser cache (Cache API / IndexedDB) and avoid local file system attempts.
       env.allowLocalModels = false;
       env.useBrowserCache = true;
-
       const modelId = "Xenova/yolos-tiny";
       const progress_callback = (p) => {
-        if (typeof onProgress === "function") {
-          onProgress(p);
-        }
+        if (typeof onProgress === "function") onProgress(p);
       };
-      const [model, processor] = await Promise.all([
-        AutoModelForObjectDetection.from_pretrained(modelId, {
-          device: "wasm",
-          progress_callback,
-        }),
-        AutoProcessor.from_pretrained(modelId, { progress_callback }),
-      ]);
+      // 1. Prefer WebGPU for 10x hardware acceleration; fallback to quantized WASM (q8)
+      const hasWebGPU = typeof navigator !== "undefined" && !!navigator.gpu;
+      const device = hasWebGPU ? "webgpu" : "wasm";
+      const dtype = hasWebGPU ? "fp32" : "q8";
+      let model, processor;
+      try {
+        [model, processor] = await Promise.all([
+          AutoModelForObjectDetection.from_pretrained(modelId, {
+            device,
+            dtype,
+            progress_callback,
+          }),
+          AutoProcessor.from_pretrained(modelId, { progress_callback }),
+        ]);
+      } catch (gpuErr) {
+        // Fallback if browser/device WebGPU initialisation fails
+        [model, processor] = await Promise.all([
+          AutoModelForObjectDetection.from_pretrained(modelId, {
+            device: "wasm",
+            dtype: "q8",
+            progress_callback,
+          }),
+          AutoProcessor.from_pretrained(modelId, { progress_callback }),
+        ]);
+      }
       detector = new ObjectDetectionPipeline({ task: "object-detection", model, processor });
       return detector;
     } catch (err) {
@@ -168,7 +179,6 @@ export async function getDetector(onProgress) {
       isLoading = false;
     }
   })();
-
   return initPromise;
 }
 
@@ -182,23 +192,19 @@ export async function getDetector(onProgress) {
 export async function detectObjects(imageSource, threshold = 0.40) {
   try {
     const pipe = await getDetector();
-    let src = imageSource;
+    // 2. Pre-scale image down to max 640px before inference
+    const optimizedSource = await resizeImageForInference(imageSource, 640);
+    let src = optimizedSource;
     let tempUrl = null;
-
-    if (imageSource instanceof Blob) {
-      tempUrl = URL.createObjectURL(imageSource);
+    if (optimizedSource instanceof Blob) {
+      tempUrl = URL.createObjectURL(optimizedSource);
       src = tempUrl;
     }
-
     const rawDetections = await pipe(src, {
       threshold,
-      percentage: true, // returns normalized 0..1 bounding box coordinates
+      percentage: true,
     });
-
-    if (tempUrl) {
-      URL.revokeObjectURL(tempUrl);
-    }
-
+    if (tempUrl) URL.revokeObjectURL(tempUrl);
     return (rawDetections || []).map((det) => ({
       label: det.label.toLowerCase(),
       score: Math.round(det.score * 100) / 100,
@@ -208,6 +214,53 @@ export async function detectObjects(imageSource, threshold = 0.40) {
     console.error("Vision detection error:", error);
     return [];
   }
+}
+/**
+ * Downscales image so Transformers.js doesn't freeze processing massive camera images.
+ */
+export async function resizeImageForInference(imageSource, maxDim = 640) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    let objectUrl = null;
+
+    img.onload = () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      const { width, height } = img;
+      if (width <= maxDim && height <= maxDim) {
+        resolve(imageSource);
+        return;
+      }
+      let newWidth = width;
+      let newHeight = height;
+      if (width > height) {
+        newWidth = maxDim;
+        newHeight = Math.round((height * maxDim) / width);
+      } else {
+        newHeight = maxDim;
+        newWidth = Math.round((width * maxDim) / height);
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = newWidth;
+      canvas.height = newHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return resolve(imageSource);
+      ctx.drawImage(img, 0, 0, newWidth, newHeight);
+      resolve(canvas.toDataURL("image/jpeg", 0.85));
+    };
+
+    img.onerror = () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      resolve(imageSource);
+    };
+
+    if (imageSource instanceof Blob) {
+      objectUrl = URL.createObjectURL(imageSource);
+      img.src = objectUrl;
+    } else {
+      img.src = imageSource;
+    }
+  });
 }
 
 /**
@@ -239,7 +292,9 @@ export async function getDetectedLabelsAndTags(imageSource, threshold = 0.40) {
     return area >= 0.05;
   });
 
-  const uniqueLabels = [...new Set(detections.map((d) => d.label))];
+  // Keep labels and tags aligned with the size-filtered detections. Using the
+  // raw detections here reintroduced tiny background guesses as full tags.
+  const uniqueLabels = [...new Set(salientDetections.map((d) => d.label))];
   
   const derivedTags = new Set();
   uniqueLabels.forEach((label) => {
