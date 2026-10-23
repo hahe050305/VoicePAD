@@ -29,6 +29,39 @@ export default function App() {
   // Zoom modal state — entry selected by clicking a card
   const [selectedEntry, setSelectedEntry] = useState(null);
 
+  // Keep the feed at the same viewport position while a card is zoomed.
+  useEffect(() => {
+    if (!selectedEntry) return undefined;
+
+    const scrollY = window.scrollY;
+    const root = document.documentElement;
+    const body = document.body;
+    const previousRootOverflow = root.style.overflow;
+    const previousBodyOverflow = body.style.overflow;
+    const previousBodyPaddingRight = body.style.paddingRight;
+    const scrollbarWidth = window.innerWidth - root.clientWidth;
+
+    root.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    if (scrollbarWidth > 0) {
+      body.style.paddingRight = `${scrollbarWidth}px`;
+    }
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setSelectedEntry(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+
+    return () => {
+      window.removeEventListener("keydown", closeOnEscape);
+      root.style.overflow = previousRootOverflow;
+      body.style.overflow = previousBodyOverflow;
+      body.style.paddingRight = previousBodyPaddingRight;
+      if (window.scrollY !== scrollY) {
+        window.scrollTo(0, scrollY);
+      }
+    };
+  }, [selectedEntry]);
+
   // Top-right label reminder popup for newly uploaded unlabeled images
   const [showLabelReminder, setShowLabelReminder] = useState(false);
   const reminderTimerRef = useRef(null);
@@ -50,7 +83,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    loadEntries();
+    void Promise.resolve()
+      .then(loadEntries)
+      .catch((err) => console.error("Failed to load memories:", err));
     const unsub = subscribeLLMStatus(setLlmStatus);
     // Initialize LLM in the background
     initLLM();
@@ -137,7 +172,7 @@ export default function App() {
       setIsListening(false);
       try {
         recognizerRef.current.stop();
-      } catch (err) {
+      } catch {
         // Ignore if already stopped
       }
     } else {
@@ -146,12 +181,12 @@ export default function App() {
       setVoiceTranscript("");
       try {
         recognizerRef.current.start();
-      } catch (err) {
+      } catch {
         // If already starting or in an invalid state, abort and restart cleanly
         try {
           recognizerRef.current.abort();
           recognizerRef.current.start();
-        } catch (e) {
+        } catch {
           setIsListening(false);
         }
       }
@@ -369,17 +404,15 @@ export default function App() {
           const dataUrl = dataUrls[i];
           try {
             console.log(`[Vision] Processing image ${i + 1}/${files.length}...`);
-            // Run OCR & Object Detection concurrently using dataUrl
-            const [ocrResult, visionResult] = await Promise.all([
-              performOCR(file).catch((err) => {
-                console.warn("[Vision] OCR error:", err);
-                return "";
-              }),
-              getDetectedLabelsAndTags(dataUrl).catch((err) => {
-                console.warn("[Vision] Vision detection error:", err);
-                return { labels: [], tags: [], detections: [] };
-              }),
-            ]);
+            // Run OCR first, then detect objects.
+            const ocrResult = await performOCR(file).catch((err) => {
+              console.warn("[Vision] OCR error:", err);
+              return "";
+            });
+            const visionResult = await getDetectedLabelsAndTags(dataUrl).catch((err) => {
+              console.warn("[Vision] Vision detection error:", err);
+              return { labels: [], tags: [], detections: [] };
+            });
             console.log("[Vision] Results -> labels:", visionResult.labels, "tags:", visionResult.tags);
             // In src/App.jsx inside handleImageCapture silent processing loop:
 const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
@@ -964,79 +997,110 @@ await db.images.update(entry.id, {
         </section>
       </main>
 
-      {/* ── Zoom Modal — full-screen card overlay ─────────────────────────── */}
+      {/* ── Centered zoomed memory card ───────────────────────────────────── */}
       {selectedEntry && (() => {
         const modalEntry = selectedEntry;
         const modalPure =
           modalEntry.type === "image" &&
           (modalEntry.isPureImage === true || (!modalEntry.ocr && !modalEntry.label) || isPureImageText(modalEntry.ocr));
+        const modalTags = modalEntry.tags?.some((tag) =>
+          !["#image", "#photo", "#picture", "#scooty", "#scooter", "#twowheeler", "#fourwheeler", "#automobile"].includes(tag)
+        )
+          ? modalEntry.tags.filter((tag) =>
+              !["#image", "#photo", "#picture", "#scooty", "#scooter", "#twowheeler", "#fourwheeler", "#automobile"].includes(tag)
+            )
+          : modalEntry.tags?.filter((tag) => tag !== "#image");
 
         return (
           <div
-            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
             onClick={() => setSelectedEntry(null)}
           >
             <div
-              className="relative bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-5"
+              className="w-full max-w-3xl max-h-[90vh] overflow-y-auto p-3.5 bg-slate-900/70 border border-slate-800/80 rounded-xl shadow-2xl animate-in zoom-in-95 duration-150"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Close button */}
-              <button
-                onClick={() => setSelectedEntry(null)}
-                className="absolute top-3 right-3 z-10 w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition"
-                aria-label="Close"
-              >
-                ✕
-              </button>
-
-              {/* Type & Label badges */}
-              <div className="flex items-center gap-2 mb-3 flex-wrap pr-10">
-                <span className="text-[11px] font-mono uppercase px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                  <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
                   {modalEntry.type === "image"
                     ? modalPure
                       ? "🖼️ Image"
                       : "📷 OCR"
                     : "📝 Note"}
-                </span>
-                {modalEntry.label && (
-                  <span className="text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/40 text-indigo-300 flex items-center gap-1">
-                    🏷️ {modalEntry.label}
                   </span>
-                )}
-                <span className="text-[10px] text-slate-500 font-mono ml-auto">
-                  {formatTime(modalEntry.timestamp)}
-                </span>
+                  {modalEntry.label ? (
+                    <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/40 text-indigo-300 flex items-center gap-1">
+                      🏷️ {modalEntry.label}
+                    </span>
+                  ) : modalEntry.type === "image" ? (
+                    <button
+                      onClick={() => { startEditing(modalEntry); setSelectedEntry(null); }}
+                      className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-600/40 text-amber-300 hover:bg-amber-900/90 transition flex items-center gap-1"
+                    >
+                      🏷️ + Label
+                    </button>
+                  ) : null}
+                </div>
+                <div className="flex flex-col items-end gap-1.5 shrink-0">
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    {formatTime(modalEntry.timestamp)}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => { startEditing(modalEntry); setSelectedEntry(null); }}
+                      className="text-[12px] text-slate-400 hover:text-indigo-400 p-1 rounded hover:bg-slate-800 transition"
+                      title="Edit memory"
+                      aria-label="Edit memory"
+                    >
+                      ✏️
+                    </button>
+                    <button
+                      onClick={(event) => { handleDeleteEntry(modalEntry, event); setSelectedEntry(null); }}
+                      className="text-[12px] text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-slate-800 transition"
+                      title="Delete memory"
+                      aria-label="Delete memory"
+                    >
+                      🗑️
+                    </button>
+                  </div>
+                </div>
               </div>
 
-              {/* Content */}
               {modalEntry.type === "image" ? (
-                <div className="space-y-3">
-                  <div className="w-full rounded-xl overflow-hidden bg-slate-950 border border-slate-800/90 flex items-center justify-center p-1">
+                <div className="mt-1 space-y-2">
+                  <div className="w-full max-h-[70vh] rounded-xl overflow-hidden bg-slate-950 border border-slate-800/90 flex items-center justify-center p-1 group">
                     <img
                       src={modalEntry.blobUrl}
                       alt={modalEntry.label || "Image"}
-                      className="max-h-[60vh] w-auto object-contain rounded-lg"
+                      className="max-h-[68vh] w-full object-contain rounded-lg"
                     />
                   </div>
-                  {!modalPure && modalEntry.ocr && (
-                    <div className="bg-slate-950/70 rounded-lg p-3 border border-slate-800">
-                      <p className="text-[10px] text-slate-500 uppercase font-semibold mb-1">Extracted Text</p>
-                      <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
-                        {modalEntry.ocr}
-                      </p>
+                  {modalPure ? (
+                    <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                      <span>🖼️</span>
+                      <span className="font-medium italic text-slate-300">Image placeholder</span>
+                      {modalEntry.label && (
+                        <span className="text-slate-400 not-italic font-normal">— {modalEntry.label}</span>
+                      )}
                     </div>
+                  ) : (
+                    <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
+                      {modalEntry.ocr || "(No readable text in image)"}
+                    </p>
                   )}
                 </div>
               ) : (
-                <p className="text-base text-slate-100 leading-relaxed whitespace-pre-wrap">
-                  {modalEntry.content}
-                </p>
+                <div className="mt-1">
+                  <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
+                    {modalEntry.content}
+                  </p>
+                </div>
               )}
 
-              {/* Tags */}
-              {modalEntry.tags && modalEntry.tags.length > 0 && (
-                <div className="flex items-center gap-1.5 mt-4 flex-wrap">
-                  {modalEntry.tags.map((tag) => (
+              {modalTags?.length > 0 && (
+                <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                  {modalTags.map((tag) => (
                     <span
                       key={tag}
                       className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 font-medium"
@@ -1046,22 +1110,6 @@ await db.images.update(entry.id, {
                   ))}
                 </div>
               )}
-
-              {/* Actions inside modal */}
-              <div className="flex items-center gap-2 mt-4 pt-3 border-t border-slate-800">
-                <button
-                  onClick={(e) => { startEditing(modalEntry, e); setSelectedEntry(null); }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium transition"
-                >
-                  ✏️ Edit
-                </button>
-                <button
-                  onClick={(e) => { handleDeleteEntry(modalEntry, e); setSelectedEntry(null); }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-rose-900/80 text-slate-200 hover:text-rose-200 rounded-lg text-xs font-medium transition"
-                >
-                  🗑️ Delete
-                </button>
-              </div>
             </div>
           </div>
         );
