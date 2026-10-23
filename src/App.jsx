@@ -381,35 +381,52 @@ export default function App() {
               }),
             ]);
             console.log("[Vision] Results -> labels:", visionResult.labels, "tags:", visionResult.tags);
-            const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
-            const isPure = typeof ocrResult === "object" ? ocrResult.isPureImage : isPureImageText(extractedText);
-            const textTags = extractTagsFromText(extractedText);
+            // In src/App.jsx inside handleImageCapture silent processing loop:
+const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
+const cleanText = (extractedText || "").trim();
 
-            const hasSubstantialText = extractedText && extractedText.trim().length > 15;
+// 1. Check if the image contains substantial readable text (e.g., posters, signs, memes)
+const words = cleanText.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(w => w.length > 2);
+const isTextDominant = words.length >= 3;
 
-            const combinedTags = hasSubstantialText
-  ? Array.from(new Set([...textTags, "#poster", "#graphic", "#document"]))
-  : Array.from(new Set([...textTags, ...visionResult.tags, "#image", "#photo"]));
+// 2. Extract keywords from text
+const textTags = deriveTags(cleanText);
+const headlineWordTags = isTextDominant ? words.slice(0, 4).map(w => `#${w}`) : [];
 
-            await db.images.update(entry.id, {
-              ocr: extractedText,
-              isPureImage: !hasSubstantialText && isPure,
-              detectedObjects: hasSubstantialText ? [] : visionResult.labels,
-              tags: combinedTags,
-            });
+// 3. If text-dominant, suppress noisy incidental vision labels (like cake/table/cup on a poster)
+const activeVisionTags = isTextDominant
+  ? visionResult.tags.filter(t => ["#person", "#car", "#bike", "#laptop"].includes(t))
+  : visionResult.tags;
+
+const combinedTags = Array.from(
+  new Set([
+    ...textTags,
+    ...headlineWordTags,
+    ...activeVisionTags,
+    ...(isTextDominant ? ["#poster", "#graphic"] : ["#photo"])
+  ])
+);
+
+// 4. Update DB - CRITICAL: Always preserve cleanText so searches match!
+await db.images.update(entry.id, {
+  ocr: cleanText,
+  isPureImage: !isTextDominant && cleanText.length === 0,
+  detectedObjects: isTextDominant ? [] : visionResult.labels,
+  tags: combinedTags,
+});
           } catch (err) {
             console.error("[Vision] Silent background processing failed:", err);
           }
         }
         // Re-sync UI state so the new tags immediately appear on the cards!
-        const updated = await refreshCache();
-        const sorted = [...updated].sort((a, b) => b.timestamp - a.timestamp);
-        setAllEntries(sorted);
+        const refreshed = await refreshCache();
+        const refreshedSorted = [...refreshed].sort((a, b) => b.timestamp - a.timestamp);
+        setAllEntries(refreshedSorted);
         if (query.trim()) {
           const ranked = await rankedSearch(query);
           setFilteredEntries(ranked.slice(0, 20));
         } else {
-          setFilteredEntries(sorted.slice(0, 20));
+          setFilteredEntries(refreshedSorted.slice(0, 20));
         }
       })();
     } catch (err) {
