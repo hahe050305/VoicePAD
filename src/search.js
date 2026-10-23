@@ -5,35 +5,84 @@ import { deriveTags } from "./tagger.js";
 import { parseIntentWithLLM } from "./llmService.js";
 import { isPureImageText } from "./ocr.js";
 
+const STOP_WORDS = new Set([
+  "a", "an", "and", "are", "at", "did", "do", "does", "for", "from", "give",
+  "have", "help", "i", "in", "is", "it", "me", "my", "of", "on", "please",
+  "show", "that", "the", "this", "to", "want", "was", "what", "where", "which",
+  "who", "with", "you", "your", "find", "search", "look", "get", "tell", "about",
+  "save", "saved", "store", "stored", "memory", "remember", "can", "could", "would",
+  "should", "how", "when", "why", "any", "all", "upload", "uploaded", "put", "leave", "left",
+  "keep", "kept", "take", "taken", "add", "added",
+]);
+
+const CATEGORY_TAGS = new Set([
+  "#vehicle", "#document", "#contact", "#travel", "#bill", "#health", "#finance",
+  "#shopping", "#security", "#reminder", "#photo", "#image", "#picture",
+]);
+const PHOTO_INTENT_TERMS = new Set([
+  "photo", "selfie", "picture", "pic", "portrait", "snap", "image", "gallery", "camera", "roll", "face", "capture", "captured",
+]);
+
+const TERM_SYNONYMS = {
+  bike: ["bike", "motorcycle", "bicycle"],
+  bicycle: ["bicycle", "bike"],
+  cycle: ["bicycle", "cycle"],
+  motorcycle: ["motorcycle", "bike"],
+  scooter: ["scooter", "motorcycle"],
+  car: ["car", "automobile"],
+  automobile: ["automobile", "car"],
+  truck: ["truck"],
+  vehicle: ["vehicle", "car", "truck", "motorcycle", "bicycle", "bus"],
+  phone: ["phone", "cellphone", "cell phone", "mobile"],
+  cell: ["cell", "cellphone", "cell phone", "phone"],
+  cellphone: ["cellphone", "cell phone", "phone", "mobile"],
+  mobile: ["mobile", "phone", "cellphone", "cell phone"],
+  bag: ["bag", "backpack", "handbag", "suitcase"],
+  plant: ["plant", "potted plant"],
+  book: ["book"],
+  bottle: ["bottle"],
+  laptop: ["laptop"],
+  scooty: ["scooty", "motorcycle", "bicycle"],
+  dog: ["dog", "puppy"],
+  puppy: ["puppy", "dog"],
+  cat: ["cat", "kitten"],
+  kitten: ["kitten", "cat"],
+  photo: ["photo", "picture", "pic", "image", "selfie", "portrait", "snap", "face"],
+  selfie: ["selfie", "photo", "picture", "portrait"],
+};
+
+function normalizeWord(word) {
+  if (["news", "series", "species"].includes(word)) return word;
+  const irregularPlurals = {
+    photos: "photo",
+    pictures: "picture",
+    selfies: "selfie",
+    images: "image",
+    buses: "bus",
+    boxes: "box",
+  };
+  if (irregularPlurals[word]) return irregularPlurals[word];
+  if (word.length > 4 && word.endsWith("ies")) return `${word.slice(0, -3)}y`;
+  if (word.length > 3 && word.endsWith("s") && !/(ss|us|is)$/.test(word)) return word.slice(0, -1);
+  return word;
+}
+
+function wordsIn(text) {
+  return (text.toLowerCase().match(/[a-z0-9]+/g) || []).map(normalizeWord);
+}
+
 /**
  * Normalizes a raw query string into lowercase tokens,
  * expanding known words to their canonical tags via aliasMap + semantic tagger.
  */
 export function normalizeQuery(query) {
   if (!query) return [];
-
-  // Get semantic tags from the full query
-  const semanticTags = deriveTags(query);
-
-  // Also tokenize individual words for substring matching (preserve BOTH raw word AND mapped tag)
-  const rawWordTokens = [];
-  const aliasTags = [];
-
-  query
-    .toLowerCase()
-    .replace(/[^\w\s#]/g, " ")
-    .split(/\s+/)
-    .filter(Boolean)
-    .forEach((t) => {
-      rawWordTokens.push(t);
-      if (aliasMap[t]) {
-        aliasTags.push(aliasMap[t]);
-      }
-    });
-
-  // Merge: semantic tags + alias tags + raw word tokens (deduped)
-  const merged = new Set([...semanticTags, ...aliasTags, ...rawWordTokens]);
-  return Array.from(merged);
+  const rawWords = wordsIn(query);
+  const terms = [...new Set(rawWords.filter((word) => (word.length > 1 || /^\d+$/.test(word)) && !STOP_WORDS.has(word)))];
+  const explicitTags = (query.toLowerCase().match(/#[a-z0-9_]+/g) || []);
+  const semanticTags = deriveTags(query).filter((tag) => tag !== "#note" || terms.includes("note"));
+  const aliasTags = terms.map((term) => aliasMap[term]).filter(Boolean);
+  return Array.from(new Set([...terms, ...explicitTags, ...semanticTags, ...aliasTags]));
 }
 
 let cachedEntries = [];
@@ -55,13 +104,19 @@ export function getCachedEntries() {
  * Scores a single entry against a list of tokens and intent hints.
  * Returns a numeric relevance score (0 = no match).
  */
-function scoreEntry(entry, tokens, rawLower, llmIntent = null) {
+function scoreEntry(entry, tokens, llmIntent = null) {
   let score = 0;
+  const matchedTerms = new Set();
+  const queryTerms = tokens.filter((token) => !token.startsWith("#"));
+  const queryTags = tokens.filter((token) => token.startsWith("#"));
   const labelText = (entry.label || "").trim();
   const mainText = (
     entry.type === "text" ? entry.content || "" : entry.ocr || ""
   ).trim();
   const fullText = `${labelText} ${mainText}`.toLowerCase();
+  const labelWords = new Set(wordsIn(labelText));
+  const mainWords = new Set(wordsIn(mainText));
+  const allWords = wordsIn(fullText);
 
   const isPure =
     entry.type === "image" &&
@@ -89,167 +144,109 @@ function scoreEntry(entry, tokens, rawLower, llmIntent = null) {
     // distinction for future per-entry selfie labeling.
   }
 
-  // 1. Exact full-phrase match against text/label (highest signal)
-  if (rawLower && fullText.includes(rawLower)) {
+  const isPhotoQuery = queryTerms.some((term) =>
+    PHOTO_INTENT_TERMS.has(term)
+  ) || queryTags.some((tag) => ["#photo", "#selfie", "#image", "#picture"].includes(tag));
+
+  for (const term of queryTerms) {
+    const variants = TERM_SYNONYMS[term] || [term];
+    const labelMatch = variants.some((variant) => {
+      const variantWords = wordsIn(variant);
+      return variantWords.length === 1
+        ? labelWords.has(variantWords[0])
+        : ` ${wordsIn(labelText).join(" ")} `.includes(` ${variantWords.join(" ")} `);
+    });
+    const textMatch = variants.some((variant) => {
+      const variantWords = wordsIn(variant);
+      return variantWords.length === 1
+        ? mainWords.has(variantWords[0])
+        : ` ${wordsIn(mainText).join(" ")} `.includes(` ${variantWords.join(" ")} `);
+    });
+
+    if (labelMatch) {
+      matchedTerms.add(term);
+      score += 80;
+    } else if (textMatch) {
+      matchedTerms.add(term);
+      score += 45;
+    }
+
+    const tagsToCheck = new Set([
+      `#${term}`,
+      `#label_${term}`,
+      ...(aliasMap[term] ? [aliasMap[term]] : []),
+      ...variants.map((variant) => `#${variant.replace(/\s+/g, "_")}`),
+    ]);
+    for (const tag of tagsToCheck) {
+      if (!effectiveTags.has(tag)) continue;
+      if (CATEGORY_TAGS.has(tag) && !["vehicle", "document", "contact", "travel", "bill", "health", "finance", "shopping", "security", "reminder", "photo", "image", "picture"].includes(term)) {
+        continue;
+      }
+      matchedTerms.add(term);
+      score += tag === `#label_${term}` ? 65 : 35;
+      break;
+    }
+
+    if (term === "note" && entry.type === "text") {
+      matchedTerms.add(term);
+      score += 25;
+    }
+
+    if (entry.type === "image" && Array.isArray(entry.detectedObjects)) {
+      const objects = entry.detectedObjects.map((object) => wordsIn(object).join(" "));
+      if (variants.some((variant) => objects.includes(wordsIn(variant).join(" ")))) {
+        matchedTerms.add(term);
+        score += 75;
+      }
+    }
+  }
+
+  // Explicit multiword phrases receive a bonus only on whole-word boundaries.
+  const phrase = queryTerms.join(" ");
+  if (queryTerms.length > 1 && phrase && ` ${allWords.join(" ")} `.includes(` ${phrase} `)) {
     score += 35;
+    queryTerms.forEach((term) => matchedTerms.add(term));
   }
-
-  // 2. Direct manual label match
-  if (labelText && (rawLower.includes(labelText.toLowerCase()) || labelText.toLowerCase().includes(rawLower))) {
-    score += 40;
-  }
-
-  // 3. Per-token match against content/ocr/label (word matches)
-  tokens.forEach((t) => {
-    if (!t.startsWith("#")) {
-      if (labelText && labelText.toLowerCase().includes(t)) {
-        score += 25; // High confidence for user-labeled images
-      } else if (mainText.toLowerCase().includes(t)) {
-        score += 15;
-      }
-    }
-  });
-
-  // 4. Tag matches against sanitized effective tags
-  const tagTokens = tokens.filter((t) => t.startsWith("#"));
-  tagTokens.forEach((t) => {
-    if (effectiveTags.has(t)) {
-      if ((t === "#photo" || t === "#selfie") && !isPure && !fullText.includes("photo") && !fullText.includes("selfie")) {
-        return; // Skip false photo tags on text notes
-      }
-      score += 12;
-    }
-  });
-
-  // 5. Manual label tag match: e.g. token 'aadhaar' matching '#label_aadhaar'
-  tokens.forEach((t) => {
-    const cleanT = t.replace(/^#/, "");
-    if (effectiveTags.has(`#label_${cleanT}`) || effectiveTags.has(`#${cleanT}`)) {
-      score += 30;
-    }
-  });
-
-  // 6. Photo & Selfie Intent Match
-  const isPhotoQuery = tokens.some((t) =>
-    [
-      "#photo", "#selfie", "#image", "#picture",
-      "selfie", "selfies", "photo", "photos",
-      "picture", "pictures", "pic", "pics",
-      "portrait", "portraits", "snap", "snaps",
-      "image", "images", "gallery", "camera"
-    ].includes(t)
-  );
 
   if (isPhotoQuery) {
     if (entry.type === "image") {
-      // Any uploaded image is a match for "photo"
-      score += isPure ? 35 : 25;
-    } else {
-      // Non-image note: DISQUALIFY from matching photo/selfie queries
-      // unless the text explicitly mentions photo or selfie
-      const hasExplicit = fullText.includes("selfie") || fullText.includes("photo") || fullText.includes("portrait") || fullText.includes("picture");
-      if (!hasExplicit) {
-        return 0; // Immediate 0 score
-      }
+      score += 25;
+      queryTerms.filter((term) => PHOTO_INTENT_TERMS.has(term)).forEach((term) => matchedTerms.add(term));
+    } else if (!/\b(photo|selfie|picture|portrait|image)\b/i.test(fullText)) {
+      return 0;
     }
   }
 
-  // 6b. Aggressive Detected object match (from vision/YOLO pipeline)
-  if (entry.type === "image" && Array.isArray(entry.detectedObjects) && entry.detectedObjects.length > 0) {
-    const rawWords = (rawLower || "").replace(/[^\w\s#]/g, " ").split(/\s+/).filter(Boolean);
-    const candidateTokens = Array.from(new Set([...tokens, ...rawWords]));
-
-    candidateTokens.forEach((t) => {
-      const cleanT = t.replace(/^#/, "").toLowerCase();
-      if (!cleanT || ["photo", "image", "picture", "pictures", "photos"].includes(cleanT)) return;
-
-      entry.detectedObjects.forEach((obj) => {
-        const objLower = (obj || "").toLowerCase();
-        // Exact detected object match: massive boost (+120) to aggressively surface top match with 0 scrolling friction
-        if (objLower === cleanT) {
-          score += 120;
-        } else if (
-          (cleanT === "bike" && (objLower === "motorcycle" || objLower === "bicycle")) ||
-          (cleanT === "bicycle" && objLower === "bicycle") ||
-          (cleanT === "cycle" && (objLower === "bicycle" || objLower === "motorcycle")) ||
-          (cleanT === "motorcycle" && (objLower === "motorcycle" || objLower === "bike")) ||
-          (cleanT === "car" && (objLower === "car" || objLower === "truck" || objLower === "automobile")) ||
-          (cleanT === "truck" && (objLower === "truck" || objLower === "car")) ||
-          (cleanT === "scooter" && (objLower === "motorcycle" || objLower === "bicycle")) ||
-          (cleanT === "vehicle" && ["car", "truck", "motorcycle", "bicycle", "bus"].includes(objLower)) ||
-          (cleanT === "dog" && (objLower === "dog" || objLower === "puppy")) ||
-          (cleanT === "cat" && (objLower === "cat" || objLower === "kitten")) ||
-          (cleanT === "phone" && (objLower === "cell phone" || objLower === "cellphone")) ||
-          (cleanT === "laptop" && objLower === "laptop") ||
-          (cleanT === "bag" && (objLower === "backpack" || objLower === "handbag" || objLower === "suitcase")) ||
-          (cleanT === "bottle" && objLower === "bottle") ||
-          (cleanT === "plant" && (objLower === "potted plant" || objLower === "plant"))
-        ) {
-          score += 120;
-        } else if (objLower.includes(cleanT) || cleanT.includes(objLower)) {
-          score += 50;
-        }
-      });
-    });
-  }
-
-  // 7. General text query on an unlabeled pure image:
-  // If user is searching for something specific like "harish", "insurance", "bike", "wifi", "bill":
-  // A pure photo that has no text and no matching label must NOT match!
-  const hasSpecTag = tokens.some((t) => {
-    const cleanT = t.replace(/^#/, "").toLowerCase();
-    if (["photo", "image", "picture", "selfie"].includes(cleanT)) return false;
-    if (cleanT === "vehicle" && !tokens.some((x) => x.replace(/^#/, "").toLowerCase() === "vehicle")) return false;
-    return (
-      effectiveTags.has(`#${cleanT}`) ||
-      effectiveTags.has(`#label_${cleanT}`) ||
-      (t.startsWith("#") && !["#photo", "#image", "#picture", "#vehicle"].includes(t) && effectiveTags.has(t)) ||
-      (cleanT === "bike" && (effectiveTags.has("#motorcycle") || effectiveTags.has("#bicycle"))) ||
-      (cleanT === "car" && (effectiveTags.has("#truck") || effectiveTags.has("#suv")))
-    );
-  });
-
-  const hasDetObj =
-    entry.type === "image" &&
-    Array.isArray(entry.detectedObjects) &&
-    tokens.some((t) => {
-      const cleanT = t.replace(/^#/, "").toLowerCase();
-      if (!cleanT || ["photo", "image", "picture"].includes(cleanT)) return false;
-      return entry.detectedObjects.some((obj) => {
-        const o = (obj || "").toLowerCase();
-        return (
-          o === cleanT ||
-          (cleanT === "bike" && (o === "motorcycle" || o === "bicycle")) ||
-          (cleanT === "car" && (o === "truck" || o === "automobile")) ||
-          o.includes(cleanT) ||
-          cleanT.includes(o)
-        );
-      });
-    });
-
-  if (isPure && !isPhotoQuery && !labelText && !hasSpecTag && !hasDetObj) {
-    return 0;
-  }
-
-  // 8. LLM Intent Boost
-  if (llmIntent) {
-    if (llmIntent.target && fullText.includes(llmIntent.target.toLowerCase())) {
-      score += 12;
+  // Category tags may support explicit category searches, but never turn an
+  // unrelated one-word alias into a match on their own.
+  for (const tag of queryTags) {
+    if (effectiveTags.has(tag) && !CATEGORY_TAGS.has(tag)) {
+      score += 20;
+      const associatedTerm = queryTerms.find((term) =>
+        aliasMap[term] === tag || `#${term}` === tag ||
+        (tag === "#parking" && ["park", "parked", "parking"].includes(term))
+      );
+      if (associatedTerm) matchedTerms.add(associatedTerm);
     }
-    if (llmIntent.categories && Array.isArray(llmIntent.categories)) {
-      llmIntent.categories.forEach((cat) => {
-        if (effectiveTags.has(cat)) {
-          score += 8;
-        }
+  }
+
+  if (llmIntent && score > 0) {
+    if (llmIntent.target && wordsIn(fullText).includes(normalizeWord(llmIntent.target.toLowerCase()))) score += 8;
+    if (Array.isArray(llmIntent.categories)) {
+      llmIntent.categories.forEach((category) => {
+        if (effectiveTags.has(category)) score += 4;
       });
     }
   }
 
+  const requiredMatches = Math.max(1, Math.ceil(queryTerms.length * 0.66));
+  if (matchedTerms.size < requiredMatches) return 0;
+  if (isPure && !isPhotoQuery && !labelText && score === 0) return 0;
   return score;
 }
 
 /**
- * Returns ALL scored and ranked entries for live feed filtering.
+ * Returns up to ten relevant entries, ranked by match strength.
  * If rawQuery is empty/blank, returns all entries sorted by recency.
  */
 export async function rankedSearch(rawQuery, llmIntent = null) {
@@ -263,28 +260,27 @@ export async function rankedSearch(rawQuery, llmIntent = null) {
 
   const tokens = normalizeQuery(rawQuery);
   if (tokens.length === 0) {
-    return [...cachedEntries].sort((a, b) => b.timestamp - a.timestamp);
+    return [];
   }
-
-  const rawLower = rawQuery.toLowerCase().trim();
 
   return cachedEntries
     .map((entry) => ({
       entry,
-      score: scoreEntry(entry, tokens, rawLower, llmIntent),
+      score: scoreEntry(entry, tokens, llmIntent),
     }))
     .filter((item) => item.score > 0)
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
       return b.entry.timestamp - a.entry.timestamp;
     })
+    .slice(0, 10)
     .map((item) => ({ ...item.entry, _score: item.score }));
 }
 
 /**
  * Fast search used for voice lookup:
  * - For photo-family queries (photo, selfie, picture, snap, etc.),
- *   returns ALL matching photos so the user sees their full gallery.
+ *   returns the top matching photos.
  * - For other queries, returns ONLY the single highest-confidence match.
  * 1. Instant local response (<2ms) via aliasMap & rule-matching.
  * 2. Background LLM refinement within a strict deadline.
@@ -309,7 +305,7 @@ export async function fastSearch(rawQuery, onProgressHit = null) {
     /\b(photo|photos|selfie|selfies|picture|pictures|pic|pics|portrait|snap|snaps|image|images)\b/i.test(queryLower);
 
   if (isPhotoFamilyQuery) {
-    // Return ALL matching photos (rankedSearch already filtered to score > 0)
+    // Keep the strongest photo matches ranked first.
     if (typeof onProgressHit === "function") {
       onProgressHit(initialRanked); // send array of all matches
     }
