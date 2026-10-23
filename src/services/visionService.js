@@ -1,7 +1,6 @@
 // src/services/visionService.js
 // In-browser Vision Object Detection pipeline via Transformers.js
 let detector = null;
-let isLoading = false;
 let initPromise = null;
 
 /**
@@ -130,7 +129,6 @@ export async function getDetector(onProgress) {
   if (detector) return detector;
   if (initPromise) return initPromise;
   initPromise = (async () => {
-    isLoading = true;
     try {
       const {
         AutoModelForObjectDetection,
@@ -158,7 +156,7 @@ export async function getDetector(onProgress) {
           }),
           AutoProcessor.from_pretrained(modelId, { progress_callback }),
         ]);
-      } catch (gpuErr) {
+      } catch {
         // Fallback if browser/device WebGPU initialisation fails
         [model, processor] = await Promise.all([
           AutoModelForObjectDetection.from_pretrained(modelId, {
@@ -175,8 +173,6 @@ export async function getDetector(onProgress) {
       console.error("Failed to load YOLO pipeline:", err);
       initPromise = null;
       throw err;
-    } finally {
-      isLoading = false;
     }
   })();
   return initPromise;
@@ -206,20 +202,23 @@ export async function detectObjects(imageSource, threshold = 0.40) {
     const optimizedSource = await resizeImageForInference(imageSource, 640);
     let src = optimizedSource;
     let tempUrl = null;
-    if (optimizedSource instanceof Blob) {
-      tempUrl = URL.createObjectURL(optimizedSource);
-      src = tempUrl;
+    try {
+      if (optimizedSource instanceof Blob) {
+        tempUrl = URL.createObjectURL(optimizedSource);
+        src = tempUrl;
+      }
+      const rawDetections = await pipe(src, {
+        threshold,
+        percentage: true,
+      });
+      return (rawDetections || []).map((det) => ({
+        label: det.label.toLowerCase(),
+        score: Math.round(det.score * 100) / 100,
+        box: det.box,
+      }));
+    } finally {
+      if (tempUrl) URL.revokeObjectURL(tempUrl);
     }
-    const rawDetections = await pipe(src, {
-      threshold,
-      percentage: true,
-    });
-    if (tempUrl) URL.revokeObjectURL(tempUrl);
-    return (rawDetections || []).map((det) => ({
-      label: det.label.toLowerCase(),
-      score: Math.round(det.score * 100) / 100,
-      box: det.box,
-    }));
   } catch (error) {
     console.error("Vision detection error:", error);
     return [];
@@ -235,28 +234,30 @@ export async function resizeImageForInference(imageSource, maxDim = 640) {
     let objectUrl = null;
 
     img.onload = () => {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      const { width, height } = img;
-      if (width <= maxDim && height <= maxDim) {
+      try {
+        const { naturalWidth: width, naturalHeight: height } = img;
+        if (width <= maxDim && height <= maxDim) {
+          resolve(imageSource);
+          return;
+        }
+        const scale = maxDim / Math.max(width, height);
+        const newWidth = Math.max(1, Math.round(width * scale));
+        const newHeight = Math.max(1, Math.round(height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = newWidth;
+        canvas.height = newHeight;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(imageSource);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, newWidth, newHeight);
+        resolve(canvas.toDataURL("image/jpeg", 0.85));
+      } catch {
         resolve(imageSource);
-        return;
+      } finally {
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
       }
-      let newWidth = width;
-      let newHeight = height;
-      if (width > height) {
-        newWidth = maxDim;
-        newHeight = Math.round((height * maxDim) / width);
-      } else {
-        newHeight = maxDim;
-        newWidth = Math.round((width * maxDim) / height);
-      }
-      const canvas = document.createElement("canvas");
-      canvas.width = newWidth;
-      canvas.height = newHeight;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return resolve(imageSource);
-      ctx.drawImage(img, 0, 0, newWidth, newHeight);
-      resolve(canvas.toDataURL("image/jpeg", 0.85));
     };
 
     img.onerror = () => {
