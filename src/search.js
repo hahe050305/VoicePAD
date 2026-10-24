@@ -71,6 +71,42 @@ function wordsIn(text) {
   return (text.toLowerCase().match(/[a-z0-9]+/g) || []).map(normalizeWord);
 }
 
+// Bounded edit distance for short query tokens. This catches common typos and
+// transpositions without turning broad substring matches into false positives.
+function editDistanceAtMost(a, b, limit) {
+  if (Math.abs(a.length - b.length) > limit) return limit + 1;
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      current[j] = Math.min(
+        current[j - 1] + 1,
+        previous[j] + 1,
+        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+      rowMin = Math.min(rowMin, current[j]);
+    }
+    if (rowMin > limit) return limit + 1;
+    previous = current;
+  }
+  return previous[b.length];
+}
+
+function fuzzyWordMatch(queryWord, candidateWord) {
+  if (queryWord === candidateWord) return 2;
+  if (queryWord.length < 4 || candidateWord.length < 4) return 0;
+  const limit = Math.min(queryWord.length, candidateWord.length) >= 8 ? 2 : 1;
+  return editDistanceAtMost(queryWord, candidateWord, limit) <= limit ? 1 : 0;
+}
+
+function wordMatch(queryWord, candidateWords) {
+  if (candidateWords.has(queryWord)) return 2;
+  let best = 0;
+  for (const candidate of candidateWords) best = Math.max(best, fuzzyWordMatch(queryWord, candidate));
+  return best;
+}
+
 /**
  * Normalizes a raw query string into lowercase tokens,
  * expanding known words to their canonical tags via aliasMap + semantic tagger.
@@ -117,6 +153,7 @@ function scoreEntry(entry, tokens, llmIntent = null) {
   const labelWords = new Set(wordsIn(labelText));
   const mainWords = new Set(wordsIn(mainText));
   const allWords = wordsIn(fullText);
+  const compactText = allWords.join("");
 
   const isPure =
     entry.type === "image" &&
@@ -153,22 +190,22 @@ function scoreEntry(entry, tokens, llmIntent = null) {
     const labelMatch = variants.some((variant) => {
       const variantWords = wordsIn(variant);
       return variantWords.length === 1
-        ? labelWords.has(variantWords[0])
+        ? wordMatch(variantWords[0], labelWords) > 0
         : ` ${wordsIn(labelText).join(" ")} `.includes(` ${variantWords.join(" ")} `);
     });
     const textMatch = variants.some((variant) => {
       const variantWords = wordsIn(variant);
       return variantWords.length === 1
-        ? mainWords.has(variantWords[0])
+        ? wordMatch(variantWords[0], mainWords) > 0
         : ` ${wordsIn(mainText).join(" ")} `.includes(` ${variantWords.join(" ")} `);
     });
 
     if (labelMatch) {
       matchedTerms.add(term);
-      score += 80;
+      score += variants.some((variant) => labelWords.has(wordsIn(variant)[0])) ? 80 : 55;
     } else if (textMatch) {
       matchedTerms.add(term);
-      score += 45;
+      score += variants.some((variant) => mainWords.has(wordsIn(variant)[0])) ? 45 : 30;
     }
 
     const tagsToCheck = new Set([
@@ -206,6 +243,17 @@ function scoreEntry(entry, tokens, llmIntent = null) {
   if (queryTerms.length > 1 && phrase && ` ${allWords.join(" ")} `.includes(` ${phrase} `)) {
     score += 35;
     queryTerms.forEach((term) => matchedTerms.add(term));
+  }
+
+  // Let a query split by spaces still match a single stored word ("iph one"
+  // vs "iPhone"), and allow small typos in multiword queries as a phrase.
+  const compactQuery = queryTerms.join("");
+  if (queryTerms.length > 1 && compactQuery.length >= 4) {
+    const compactDistance = editDistanceAtMost(compactQuery, compactText, 1);
+    if (compactText.includes(compactQuery) || compactDistance <= 1) {
+      score += 24;
+      queryTerms.forEach((term) => matchedTerms.add(term));
+    }
   }
 
   if (isPhotoQuery) {

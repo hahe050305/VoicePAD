@@ -75,22 +75,23 @@ async function getOcrInput(file) {
 
   try {
     const bitmap = await createImageBitmap(file);
-    const maxDim = 1280;
-    if (!isGif && bitmap.width <= maxDim && bitmap.height <= maxDim) {
-      bitmap.close();
-      return file;
-    }
     try {
-      // Explicitly rasterize GIFs to a still image; Tesseract reads only one frame.
-      const ratio = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+      // Upscale small images for plate/name text, and downscale oversized images.
+      // Tesseract reads GIFs as a still image, so rasterize them explicitly.
+      const maxDim = 1600;
+      const minDim = 900;
+      const longest = Math.max(bitmap.width, bitmap.height);
+      const ratio = Math.min(maxDim / longest, Math.max(1, minDim / longest));
       const targetWidth = Math.max(1, Math.round(bitmap.width * ratio));
       const targetHeight = Math.max(1, Math.round(bitmap.height * ratio));
+      if (!isGif && ratio === 1) return file;
       const canvas = document.createElement("canvas");
       canvas.width = targetWidth;
       canvas.height = targetHeight;
       const ctx = canvas.getContext("2d");
       if (!ctx) return file;
 
+      ctx.filter = "grayscale(1) contrast(1.2)";
       ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
       const mimeType = isGif ? "image/png" : "image/jpeg";
       const blob = await new Promise((resolve) => canvas.toBlob(resolve, mimeType, 0.85));
@@ -121,25 +122,16 @@ export async function prewarmOCR() {
  */
 export async function performOCR(file, onProgress) {
   const input = await getOcrInput(file);
-  // 1. Instant Hardware Native OS OCR (Chrome/Edge/Android/macOS) -> ~20ms
+  let nativeText = "";
+  // Native OCR can be fast but incomplete. Keep its result and compare it with
+  // Tesseract instead of returning early after recognizing only part of an image.
   if (typeof window !== "undefined" && "TextDetector" in window) {
     let bitmap;
     try {
       const detector = new window.TextDetector();
       bitmap = await createImageBitmap(input);
       const detections = await detector.detect(bitmap);
-      const nativeText = (detections || []).map((d) => d.rawValue || "").join(" ").trim();
-      if (nativeText) {
-        const isPure = isPureImageText(nativeText);
-        if (!isPure) {
-          return {
-            text: nativeText,
-            rawText: nativeText,
-            isPureImage: false,
-            confidence: 98,
-          };
-        }
-      }
+      nativeText = (detections || []).map((d) => d.rawValue || "").join("\n").trim();
     } catch (e) {
       console.debug("[OCR] Native TextDetector fallback to WASM:", e);
     } finally {
@@ -149,7 +141,14 @@ export async function performOCR(file, onProgress) {
   // 2. Fallback to pre-warmed Tesseract.js with downscaling
   const worker = await getWorker(onProgress);
   const ret = await worker.recognize(input);
-  const rawText = ret?.data?.text?.trim() || "";
+  const tesseractText = ret?.data?.text?.trim() || "";
+  const mergedLines = [...tesseractText.split(/\n+/), ...nativeText.split(/\n+/)]
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line, index, lines) =>
+      lines.findIndex((candidate) => candidate.toLowerCase() === line.toLowerCase()) === index
+    );
+  const rawText = mergedLines.join("\n");
   const confidence = ret?.data?.confidence || 0;
   const isPure = isPureImageText(rawText);
   return {
