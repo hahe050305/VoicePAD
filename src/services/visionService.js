@@ -63,7 +63,9 @@ export const HYPERLOCAL_COCO_TAGS = {
   scissors: ["#stationery", "#tool", "#scissors"],
 
   // ── 7. People & Pets ──────────────────────────────────────────────────────────
-  person: ["#photo", "#person", "#selfie", "#people"],
+  // A person in frame does not imply a selfie. The image already receives a
+  // generic photo tag at upload; keep detection labels specific to the object.
+  person: ["#person", "#people"],
   cat: ["#pet", "#animal", "#cat", "#kitten"],
   dog: ["#pet", "#animal", "#dog", "#puppy"],
   bird: ["#animal", "#bird", "#nature"],
