@@ -423,7 +423,8 @@ export default function App() {
               .replace(/[^a-z0-9\s]/g, " ")
               .split(/\s+/)
               .filter((word) => word.length > 2);
-            const isTextDominant = words.length >= 3;
+            const hasVehiclePlate = /\b[A-Z]{2}\s?\d{1,2}\s?[A-Z]{0,3}\s?\d{3,4}\b/i.test(cleanText);
+            const isTextDominant = words.length >= 3 || hasVehiclePlate;
 
             let visionResult = { labels: [], tags: [], detections: [] };
             if (!isTextDominant) {
@@ -445,7 +446,8 @@ export default function App() {
               ...textTags,
               ...headlineWordTags,
               ...activeVisionTags,
-              ...(isTextDominant ? ["#poster", "#graphic"] : ["#photo"]),
+              ...(hasVehiclePlate ? ["#vehicle"] : []),
+              ...(isTextDominant && !hasVehiclePlate ? ["#poster", "#graphic"] : ["#photo"]),
             ]));
 
             await db.images.update(entry.id, {
