@@ -412,50 +412,58 @@ export default function App() {
           try {
             console.log(`[Vision] Processing image ${i + 1}/${files.length}...`);
             // Run OCR first, then detect objects.
-            const ocrResult = await performOCR(file).catch((err) => {
-              console.warn("[Vision] OCR error:", err);
-              return "";
-            });
-            const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
-            const cleanText = extractedText.trim();
-            const words = cleanText
-              .toLowerCase()
-              .replace(/[^a-z0-9\s]/g, " ")
-              .split(/\s+/)
-              .filter((word) => word.length > 2);
-            const hasVehiclePlate = /\b[A-Z]{2}\s?\d{1,2}\s?[A-Z]{0,3}\s?\d{3,4}\b/i.test(cleanText);
-            const isTextDominant = words.length >= 3 || hasVehiclePlate;
+            // Run OCR (off-thread worker, never freezes UI)
+// 1. Fast Native + Tesseract OCR (<150ms total)
+const ocrResult = await performOCR(file).catch((err) => {
+  console.warn("[Vision] OCR error:", err);
+  return "";
+});
 
-            let visionResult = { labels: [], tags: [], detections: [] };
-            if (!isTextDominant) {
-              visionResult = await getDetectedLabelsAndTags(dataUrl).catch((err) => {
-                console.warn("[Vision] Vision detection error:", err);
-                return { labels: [], tags: [], detections: [] };
-              });
-            }
+const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
+const cleanText = extractedText.trim();
 
-            console.log("[Vision] Results -> labels:", visionResult.labels, "tags:", visionResult.tags);
-            // deriveTags uses #note as its empty-text fallback; avoid labeling
-            // every OCR-empty photo as a note.
-            const textTags = cleanText ? deriveTags(cleanText) : [];
-            const headlineWordTags = isTextDominant ? words.slice(0, 4).map((word) => `#${word}`) : [];
-            const activeVisionTags = isTextDominant
-              ? visionResult.tags.filter((tag) => ["#person", "#car", "#bike", "#laptop"].includes(tag))
-              : visionResult.tags;
-            const combinedTags = Array.from(new Set([
-              ...textTags,
-              ...headlineWordTags,
-              ...activeVisionTags,
-              ...(hasVehiclePlate ? ["#vehicle"] : []),
-              ...(isTextDominant && !hasVehiclePlate ? ["#poster", "#graphic"] : ["#photo"]),
-            ]));
+// Extract genuine words (length >= 3, alphabetic, e.g. "happy", "diwali")
+const validWords = cleanText
+  .replace(/[^a-zA-Z\s]/g, " ")
+  .split(/\s+/)
+  .filter((word) => word.length >= 3);
 
-            await db.images.update(entry.id, {
-              ocr: cleanText,
-              isPureImage: !isTextDominant && cleanText.length === 0,
-              detectedObjects: isTextDominant ? [] : visionResult.labels,
-              tags: combinedTags,
-            });
+// Strict vehicle plate check: MUST be 2 state letters + 1-2 digits + 1-2 letters + 4 digits (e.g. BR01CJ6440)
+// This strictly prevents "YN3060" or random poster graphics from being tagged as a vehicle
+const strictPlate = cleanText.toUpperCase().replace(/[^A-Z0-9]/g, "").match(/^([A-Z]{2}\d{1,2}[A-Z]{1,2}\d{4})$/);
+const activePlate = strictPlate ? strictPlate[1] : null;
+
+// Posters, banners, greetings, slides with words like "HAPPY DIWALI" are text-dominant
+const isTextDominant = validWords.length >= 2 || !!activePlate;
+
+// 2. YOLO Object detection: ONLY run for photos WITHOUT dominant text
+let visionResult = { labels: [], tags: [], detections: [] };
+if (!isTextDominant) {
+  visionResult = await getDetectedLabelsAndTags(dataUrl).catch((err) => {
+    console.warn("[Vision] Vision detection error:", err);
+    return { labels: [], tags: [], detections: [] };
+  });
+}
+
+// 3. Clean tags: Extract headline keywords (#happy, #diwali, #poster) and discard garbage noise
+const textTags = cleanText ? deriveTags(cleanText) : [];
+const headlineWordTags = validWords.slice(0, 4).map((w) => `#${w.toLowerCase()}`);
+const activeVisionTags = isTextDominant ? [] : (visionResult.tags || []);
+
+const combinedTags = Array.from(new Set([
+  ...textTags,
+  ...headlineWordTags,
+  ...activeVisionTags,
+  ...(activePlate ? ["#vehicle", `#${activePlate}`] : []),
+  ...(isTextDominant && !activePlate ? ["#poster", "#graphic"] : ["#photo"]),
+]));
+
+await db.images.update(entry.id, {
+  ocr: cleanText,
+  isPureImage: !activePlate && !isTextDominant && cleanText.length === 0,
+  detectedObjects: isTextDominant ? [] : visionResult.labels,
+  tags: combinedTags,
+});
           } catch (err) {
             console.error("[Vision] Silent background processing failed:", err);
           }
