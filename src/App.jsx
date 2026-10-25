@@ -6,7 +6,7 @@ import { performOCR, isPureImageText, prewarmOCR } from "./ocr.js";
 import { deriveTags } from "./tagger.js";
 import { initLLM, subscribeLLMStatus } from "./llmService.js";
 import { getDetectedLabelsAndTags, prewarmDetector } from "./services/visionService.js";
-
+import { prewarmDeepLearningOCR } from "./services/deepOcrService.js";
 import { createId } from "./id.js";
 
 export default function App() {
@@ -94,7 +94,7 @@ export default function App() {
 
     prewarmOCR();
     prewarmDetector();
-
+    prewarmDeepLearningOCR();
     return () => {
       unsub();
       if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);
