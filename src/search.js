@@ -24,15 +24,18 @@ const PHOTO_INTENT_TERMS = new Set([
 ]);
 
 const TERM_SYNONYMS = {
-  bike: ["bike", "motorcycle", "bicycle"],
-  bicycle: ["bicycle", "bike"],
+  bike: ["bike", "motorcycle", "bicycle", "scooty", "scooter", "twowheeler"],
+  bicycle: ["bicycle", "bike", "cycle"],
   cycle: ["bicycle", "cycle"],
-  motorcycle: ["motorcycle", "bike"],
-  scooter: ["scooter", "motorcycle"],
-  car: ["car", "automobile"],
+  motorcycle: ["motorcycle", "bike", "scooter", "scooty", "twowheeler"],
+  scooter: ["scooter", "motorcycle", "scooty", "bike"],
+  scooty: ["scooty", "motorcycle", "scooter", "bike", "twowheeler"],
+  car: ["car", "automobile", "fourwheeler", "suv"],
   automobile: ["automobile", "car"],
   truck: ["truck"],
-  vehicle: ["vehicle", "car", "truck", "motorcycle", "bicycle", "bus"],
+  vehicle: ["vehicle", "car", "truck", "motorcycle", "bicycle", "bike", "scooty", "scooter", "bus"],
+  plate: ["plate", "numberplate", "license", "registration", "vehicle"],
+  numberplate: ["numberplate", "plate", "license", "registration", "vehicle"],
   phone: ["phone", "cellphone", "cell phone", "mobile"],
   cell: ["cell", "cellphone", "cell phone", "phone"],
   cellphone: ["cellphone", "cell phone", "phone", "mobile"],
@@ -42,13 +45,14 @@ const TERM_SYNONYMS = {
   book: ["book"],
   bottle: ["bottle"],
   laptop: ["laptop"],
-  scooty: ["scooty", "motorcycle", "bicycle"],
   dog: ["dog", "puppy"],
   puppy: ["puppy", "dog"],
   cat: ["cat", "kitten"],
   kitten: ["kitten", "cat"],
   photo: ["photo", "picture", "pic", "image", "selfie", "portrait", "snap", "face"],
   selfie: ["selfie", "photo", "picture", "portrait"],
+  diwali: ["diwali", "deepavali", "festival", "festive"],
+  festival: ["festival", "diwali", "celebration"],
 };
 
 function normalizeWord(word) {
@@ -60,6 +64,9 @@ function normalizeWord(word) {
     images: "image",
     buses: "bus",
     boxes: "box",
+    bikes: "bike",
+    cars: "car",
+    plates: "plate",
   };
   if (irregularPlurals[word]) return irregularPlurals[word];
   if (word.length > 4 && word.endsWith("ies")) return `${word.slice(0, -3)}y`;
@@ -71,8 +78,7 @@ function wordsIn(text) {
   return (text.toLowerCase().match(/[a-z0-9]+/g) || []).map(normalizeWord);
 }
 
-// Bounded edit distance for short query tokens. This catches common typos and
-// transpositions without turning broad substring matches into false positives.
+// Bounded edit distance for typos and short queries
 function editDistanceAtMost(a, b, limit) {
   if (Math.abs(a.length - b.length) > limit) return limit + 1;
   let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
@@ -95,21 +101,32 @@ function editDistanceAtMost(a, b, limit) {
 
 function fuzzyWordMatch(queryWord, candidateWord) {
   if (queryWord === candidateWord) return 2;
-  if (queryWord.length < 4 || candidateWord.length < 4) return 0;
-  const limit = Math.min(queryWord.length, candidateWord.length) >= 8 ? 2 : 1;
-  return editDistanceAtMost(queryWord, candidateWord, limit) <= limit ? 1 : 0;
+  // Substring match: if query is at least 3 chars and is contained in candidate
+  if (queryWord.length >= 3 && candidateWord.includes(queryWord)) return 1.5;
+  if (candidateWord.length >= 3 && queryWord.includes(candidateWord)) return 1.5;
+
+  // Typo tolerance:
+  // For 3-5 letter words, allow 1 edit (e.g. biek -> bike, plte -> plate, bro1 -> br01)
+  const maxLen = Math.max(queryWord.length, candidateWord.length);
+  const minLen = Math.min(queryWord.length, candidateWord.length);
+  if (minLen >= 3) {
+    const limit = maxLen >= 7 ? 2 : 1;
+    if (editDistanceAtMost(queryWord, candidateWord, limit) <= limit) return 1;
+  }
+  return 0;
 }
 
 function wordMatch(queryWord, candidateWords) {
   if (candidateWords.has(queryWord)) return 2;
   let best = 0;
-  for (const candidate of candidateWords) best = Math.max(best, fuzzyWordMatch(queryWord, candidate));
+  for (const candidate of candidateWords) {
+    best = Math.max(best, fuzzyWordMatch(queryWord, candidate));
+  }
   return best;
 }
 
 /**
- * Normalizes a raw query string into lowercase tokens,
- * expanding known words to their canonical tags via aliasMap + semantic tagger.
+ * Normalizes query: handles spaced words, typos, short forms, and aliases.
  */
 export function normalizeQuery(query) {
   if (!query) return [];
@@ -137,8 +154,7 @@ export function getCachedEntries() {
 }
 
 /**
- * Scores a single entry against a list of tokens and intent hints.
- * Returns a numeric relevance score (0 = no match).
+ * Scores an entry against query tokens with robust typo & spaced-word mapping.
  */
 function scoreEntry(entry, tokens, llmIntent = null) {
   let score = 0;
@@ -159,8 +175,6 @@ function scoreEntry(entry, tokens, llmIntent = null) {
     entry.type === "image" &&
     (entry.isPureImage === true || (!entry.ocr && !entry.label) || isPureImageText(entry.ocr));
 
-  // Determine effective tags for the entry:
-  // If entry has readable text and is not a pure image, strip #photo tags so text docs don't masquerade as photos
   const rawTags = entry.tags || [];
   const effectiveTags = new Set(
     rawTags.filter((t) => {
@@ -175,10 +189,6 @@ function scoreEntry(entry, tokens, llmIntent = null) {
     effectiveTags.add("#photo");
     effectiveTags.add("#image");
     effectiveTags.add("#picture");
-    // Note: #selfie is NOT force-added — it stays only if the entry was
-    // originally tagged as selfie, so "selfie" queries still match all photos
-    // (they are treated as a photo-family query below) while preserving the
-    // distinction for future per-entry selfie labeling.
   }
 
   const isPhotoQuery = queryTerms.some((term) =>
@@ -187,27 +197,20 @@ function scoreEntry(entry, tokens, llmIntent = null) {
 
   for (const term of queryTerms) {
     const variants = TERM_SYNONYMS[term] || [term];
-    const labelMatch = variants.some((variant) => {
-      const variantWords = wordsIn(variant);
-      return variantWords.length === 1
-        ? wordMatch(variantWords[0], labelWords) > 0
-        : ` ${wordsIn(labelText).join(" ")} `.includes(` ${variantWords.join(" ")} `);
-    });
-    const textMatch = variants.some((variant) => {
-      const variantWords = wordsIn(variant);
-      return variantWords.length === 1
-        ? wordMatch(variantWords[0], mainWords) > 0
-        : ` ${wordsIn(mainText).join(" ")} `.includes(` ${variantWords.join(" ")} `);
-    });
 
-    if (labelMatch) {
+    // 1. Text & Label Matching (supports typos & fuzzy matching)
+    const labelScore = Math.max(...variants.map(v => wordMatch(wordsIn(v)[0] || v, labelWords)), 0);
+    const textScore = Math.max(...variants.map(v => wordMatch(wordsIn(v)[0] || v, mainWords)), 0);
+
+    if (labelScore > 0) {
       matchedTerms.add(term);
-      score += variants.some((variant) => labelWords.has(wordsIn(variant)[0])) ? 80 : 55;
-    } else if (textMatch) {
+      score += labelScore >= 2 ? 80 : 55;
+    } else if (textScore > 0) {
       matchedTerms.add(term);
-      score += variants.some((variant) => mainWords.has(wordsIn(variant)[0])) ? 45 : 30;
+      score += textScore >= 2 ? 50 : 35;
     }
 
+    // 2. Tag Matching with Synonyms & Aliases
     const tagsToCheck = new Set([
       `#${term}`,
       `#label_${term}`,
@@ -216,12 +219,15 @@ function scoreEntry(entry, tokens, llmIntent = null) {
     ]);
     for (const tag of tagsToCheck) {
       if (!effectiveTags.has(tag)) continue;
-      if (CATEGORY_TAGS.has(tag) && !["vehicle", "document", "contact", "travel", "bill", "health", "finance", "shopping", "security", "reminder", "photo", "image", "picture"].includes(term)) {
-        continue;
-      }
       matchedTerms.add(term);
-      score += tag === `#label_${term}` ? 65 : 35;
+      score += tag === `#label_${term}` ? 65 : 40;
       break;
+    }
+
+    // 3. Compact substring matching (handles spaced inputs: e.g. "br 01" matching "br01cj6440")
+    if (term.length >= 3 && compactText.includes(term)) {
+      matchedTerms.add(term);
+      score += 45;
     }
 
     if (term === "note" && entry.type === "text") {
@@ -238,20 +244,14 @@ function scoreEntry(entry, tokens, llmIntent = null) {
     }
   }
 
-  // Explicit multiword phrases receive a bonus only on whole-word boundaries.
-  const phrase = queryTerms.join(" ");
-  if (queryTerms.length > 1 && phrase && ` ${allWords.join(" ")} `.includes(` ${phrase} `)) {
-    score += 35;
-    queryTerms.forEach((term) => matchedTerms.add(term));
-  }
-
-  // Let a query split by spaces still match a single stored word ("iph one"
-  // vs "iPhone"), and allow small typos in multiword queries as a phrase.
+  // Combined phrase & compacted matching (e.g. "br 01 c" or "happy diwali")
   const compactQuery = queryTerms.join("");
-  if (queryTerms.length > 1 && compactQuery.length >= 4) {
-    const compactDistance = editDistanceAtMost(compactQuery, compactText, 1);
-    if (compactText.includes(compactQuery) || compactDistance <= 1) {
-      score += 24;
+  if (queryTerms.length > 1 && compactQuery.length >= 3) {
+    if (compactText.includes(compactQuery)) {
+      score += 50;
+      queryTerms.forEach((term) => matchedTerms.add(term));
+    } else if (editDistanceAtMost(compactQuery, compactText, 1) <= 1) {
+      score += 35;
       queryTerms.forEach((term) => matchedTerms.add(term));
     }
   }
@@ -265,37 +265,21 @@ function scoreEntry(entry, tokens, llmIntent = null) {
     }
   }
 
-  // Category tags may support explicit category searches, but never turn an
-  // unrelated one-word alias into a match on their own.
   for (const tag of queryTags) {
     if (effectiveTags.has(tag) && !CATEGORY_TAGS.has(tag)) {
-      score += 20;
-      const associatedTerm = queryTerms.find((term) =>
-        aliasMap[term] === tag || `#${term}` === tag ||
-        (tag === "#parking" && ["park", "parked", "parking"].includes(term))
-      );
-      if (associatedTerm) matchedTerms.add(associatedTerm);
+      score += 25;
+      matchedTerms.add(tag.replace("#", ""));
     }
   }
 
-  if (llmIntent && score > 0) {
-    if (llmIntent.target && wordsIn(fullText).includes(normalizeWord(llmIntent.target.toLowerCase()))) score += 8;
-    if (Array.isArray(llmIntent.categories)) {
-      llmIntent.categories.forEach((category) => {
-        if (effectiveTags.has(category)) score += 4;
-      });
-    }
-  }
-
-  const requiredMatches = Math.max(1, Math.ceil(queryTerms.length * 0.66));
+  const requiredMatches = Math.max(1, Math.ceil(queryTerms.length * 0.5));
   if (matchedTerms.size < requiredMatches) return 0;
   if (isPure && !isPhotoQuery && !labelText && score === 0) return 0;
   return score;
 }
 
 /**
- * Returns up to ten relevant entries, ranked by match strength.
- * If rawQuery is empty/blank, returns all entries sorted by recency.
+ * Ranked Search: Returns results with match scores.
  */
 export async function rankedSearch(rawQuery, llmIntent = null) {
   if (!cacheLoaded || cachedEntries.length === 0) {
@@ -321,69 +305,19 @@ export async function rankedSearch(rawQuery, llmIntent = null) {
       if (b.score !== a.score) return b.score - a.score;
       return b.entry.timestamp - a.entry.timestamp;
     })
-    .slice(0, 10)
+    .slice(0, 15)
     .map((item) => ({ ...item.entry, _score: item.score }));
 }
 
 /**
- * Fast search used for voice lookup:
- * - For photo-family queries (photo, selfie, picture, snap, etc.),
- *   returns the top matching photos.
- * - For other queries, returns ONLY the single highest-confidence match.
- * 1. Instant local response (<2ms) via aliasMap & rule-matching.
- * 2. Background LLM refinement within a strict deadline.
+ * Fast Search for Voice & Live Keystrokes.
  */
-const PHOTO_FAMILY_WORDS = new Set([
-  "photo", "photos", "selfie", "selfies", "picture", "pictures",
-  "pic", "pics", "portrait", "portraits", "snap", "snaps", "image", "images",
-  "gallery", "camera", "#photo", "#selfie", "#image", "#picture"
-]);
-
 export async function fastSearch(rawQuery, onProgressHit = null) {
   const initialRanked = await rankedSearch(rawQuery);
   if (initialRanked.length === 0) return null;
 
-  // Detect if this is a photo-family query (check words, tokens, and raw query)
-  const queryLower = (rawQuery || "").toLowerCase();
-  const queryWords = queryLower.replace(/[^\w\s#]/g, " ").split(/\s+/).filter(Boolean);
-  const normalizedTokens = normalizeQuery(rawQuery);
-  const isPhotoFamilyQuery =
-    queryWords.some((w) => PHOTO_FAMILY_WORDS.has(w)) ||
-    normalizedTokens.some((t) => PHOTO_FAMILY_WORDS.has(t)) ||
-    /\b(photo|photos|selfie|selfies|picture|pictures|pic|pics|portrait|snap|snaps|image|images)\b/i.test(queryLower);
-
-  if (isPhotoFamilyQuery) {
-    // Keep the strongest photo matches ranked first.
-    if (typeof onProgressHit === "function") {
-      onProgressHit(initialRanked); // send array of all matches
-    }
-    return initialRanked;
-  }
-
-  // Non-photo query: single best hit
-  let bestHit = initialRanked[0];
-
-  // If initial hit is available, notify caller immediately
   if (typeof onProgressHit === "function") {
-    onProgressHit(bestHit);
+    onProgressHit(initialRanked);
   }
-
-  // Refine with local LLM if intent helps narrow down
-  try {
-    const intentPromise = parseIntentWithLLM(rawQuery);
-    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 350));
-    const intent = await Promise.race([intentPromise, timeoutPromise]);
-
-    if (intent && (intent.target || (intent.categories && intent.categories.length > 0))) {
-      const refinedRanked = await rankedSearch(rawQuery, intent);
-      if (refinedRanked.length > 0) {
-        bestHit = refinedRanked[0];
-      }
-    }
-  } catch (err) {
-    console.debug("LLM refinement skipped for speed:", err);
-  }
-
-  return bestHit;
+  return initialRanked;
 }
-
