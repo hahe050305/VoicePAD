@@ -2,11 +2,10 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { db, seedDemoData } from "./db.js";
 import { rankedSearch, fastSearch, refreshCache } from "./search.js";
-import { performOCR, isPureImageText, prewarmOCR } from "./ocr.js";
+import { performOCR, isPureImageText } from "./ocr.js";
 import { deriveTags } from "./tagger.js";
 import { initLLM, subscribeLLMStatus } from "./llmService.js";
-import { getDetectedLabelsAndTags, prewarmDetector } from "./services/visionService.js";
-import { prewarmDeepLearningOCR } from "./services/deepOcrService.js";
+import { getDetectedLabelsAndTags} from "./services/visionService.js";
 import { createId } from "./id.js";
 
 export default function App() {
