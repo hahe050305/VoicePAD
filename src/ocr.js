@@ -33,8 +33,8 @@ export function isPureImageText(text) {
   if (!text || !text.trim()) return true;
   const clean = text.trim();
 
-  // If plate pattern exists, it's NOT a pure image
-  if (extractVehiclePlate(clean)) return false;
+  // If plate or ID pattern exists, it's NOT a pure image
+  if (extractVehiclePlate(clean) || extractStructuredIds(clean).length > 0) return false;
 
   // Words of length >= 3
   const words = clean.split(/\s+/).filter(w => /^[a-zA-Z]{3,}$/.test(w));
@@ -48,24 +48,19 @@ export function isPureImageText(text) {
 
 /**
  * Intelligent Plate & Registration Extractor.
- * Handles spaced characters, OCR character confusions (O/0, I/1, B/8),
- * e.g. "o. 8 -BROIC| \ WN] a § ; @)" -> "BR01C" or "BR01CJ6440"
+ * Handles spaced characters, OCR character confusions (O/0, I/1, B/8).
  */
 export function extractVehiclePlate(rawText) {
   if (!rawText) return null;
 
-  // 1. Remove weird symbols and punctuation, uppercase all
   let s = rawText.toUpperCase();
 
-  // 2. Normalize common OCR character confusions on Indian/international plates:
-  // 'O' in place of '0' after state code, or 'I' in place of '1'
-  // e.g. BRO1C -> BR01C
+  // Normalize common OCR character confusions on Indian/international plates:
   s = s.replace(/([A-Z]{2})\s*O(\d)/g, "$1 0$2");
   s = s.replace(/([A-Z]{2})\s*(\d)\s*O\b/g, "$1 $20");
   s = s.replace(/([A-Z]{2})\s*I(\d)/g, "$1 1$2");
   s = s.replace(/\bBRO1C\b/g, "BR01C");
 
-  // Compact alphanumeric only
   const compact = s.replace(/[^A-Z0-9]/g, "");
 
   // Standard full Indian plate: 2 letters State + 1-2 digits Dist + 0-3 letters + 3-4 digits
@@ -82,6 +77,31 @@ export function extractVehiclePlate(rawText) {
   }
 
   return null;
+}
+
+/**
+ * Compact Structured ID Matcher.
+ * Matches Aadhaar, PAN card, Driving Licenses, SSN across multi-line or spaced tokens.
+ */
+export function extractStructuredIds(rawText) {
+  if (!rawText) return [];
+  const found = [];
+  const upper = rawText.toUpperCase();
+  const compact = upper.replace(/[^A-Z0-9]/g, "");
+
+  // 1. PAN Card: 5 letters + 4 digits + 1 letter (e.g. ABCDE1234F)
+  const panMatch = compact.match(/([A-Z]{5}\d{4}[A-Z])/);
+  if (panMatch) found.push({ type: "pan", value: panMatch[1], tag: "#document" });
+
+  // 2. Aadhaar Card: 12 consecutive digits (handles "4532 9821 1234")
+  const aadhaarMatch = compact.match(/(\d{12})/);
+  if (aadhaarMatch) found.push({ type: "aadhaar", value: aadhaarMatch[1], tag: "#document" });
+
+  // 3. Driving License: e.g. DL-1420110012345 or state + 13-15 chars
+  const dlMatch = compact.match(/([A-Z]{2}\d{13,15})/);
+  if (dlMatch) found.push({ type: "dl", value: dlMatch[1], tag: "#document" });
+
+  return found;
 }
 
 /**
@@ -159,8 +179,9 @@ export async function performOCR(file, onProgress) {
     console.debug("[OCR] Tesseract pass failed:", tessErr);
   }
 
-  // Clean lines: discard 1-character punctuation noise lines like '=', '-', '\', ';'
-  const rawLines = `${nativeText}\n${tesseractText}`
+  // Clean lines: discard 1-character punctuation noise lines
+  const fullRaw = `${nativeText}\n${tesseractText}`;
+  const rawLines = fullRaw
     .split(/\n+/)
     .map(l => l.trim())
     .filter(l => l.length >= 2 && /[a-zA-Z0-9]/.test(l));
@@ -168,14 +189,16 @@ export async function performOCR(file, onProgress) {
   const uniqueLines = Array.from(new Set(rawLines));
   const rawText = uniqueLines.join("\n");
 
-  const plate = extractVehiclePlate(`${nativeText} ${tesseractText}`);
-  const isPure = !plate && isPureImageText(rawText);
+  const plate = extractVehiclePlate(fullRaw);
+  const structuredIds = extractStructuredIds(fullRaw);
+  const isPure = !plate && structuredIds.length === 0 && isPureImageText(rawText);
 
   return {
     text: isPure ? "" : rawText,
     rawText,
     isPureImage: isPure,
-    confidence: plate ? 95 : 85,
+    confidence: plate || structuredIds.length > 0 ? 95 : 85,
     plate,
+    structuredIds,
   };
 }
