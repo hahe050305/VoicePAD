@@ -414,12 +414,15 @@ export default function App() {
             // Run OCR first, then detect objects.
             // Run OCR (off-thread worker, never freezes UI)
 // 1. Fast Native + Tesseract OCR (<150ms total)
+// 1. Fast Native + Tesseract OCR (<150ms total)
 const ocrResult = await performOCR(file).catch((err) => {
   console.warn("[Vision] OCR error:", err);
   return "";
 });
 
 const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
+const activePlate = typeof ocrResult === "object" && ocrResult?.plate ? ocrResult.plate : null;
+const structuredIds = typeof ocrResult === "object" && Array.isArray(ocrResult?.structuredIds) ? ocrResult.structuredIds : [];
 const cleanText = extractedText.trim();
 
 // Extract genuine words (length >= 3, alphabetic, e.g. "happy", "diwali")
@@ -428,15 +431,12 @@ const validWords = cleanText
   .split(/\s+/)
   .filter((word) => word.length >= 3);
 
-// Strict vehicle plate check: MUST be 2 state letters + 1-2 digits + 1-2 letters + 4 digits (e.g. BR01CJ6440)
-// This strictly prevents "YN3060" or random poster graphics from being tagged as a vehicle
-const strictPlate = cleanText.toUpperCase().replace(/[^A-Z0-9]/g, "").match(/^([A-Z]{2}\d{1,2}[A-Z]{1,2}\d{4})$/);
-const activePlate = strictPlate ? strictPlate[1] : null;
+// Mark as structured document/plate if plate or national ID exists
+const hasVehiclePlate = !!activePlate;
+const hasStructuredId = structuredIds.length > 0;
+const isTextDominant = hasVehiclePlate || hasStructuredId || validWords.length >= 2;
 
-// Posters, banners, greetings, slides with words like "HAPPY DIWALI" are text-dominant
-const isTextDominant = validWords.length >= 2 || !!activePlate;
-
-// 2. YOLO Object detection: ONLY run for photos WITHOUT dominant text
+// 2. YOLO Object detection: ONLY run for photos WITHOUT dominant text, plates, or IDs
 let visionResult = { labels: [], tags: [], detections: [] };
 if (!isTextDominant) {
   visionResult = await getDetectedLabelsAndTags(dataUrl).catch((err) => {
@@ -445,22 +445,43 @@ if (!isTextDominant) {
   });
 }
 
-// 3. Clean tags: Extract headline keywords (#happy, #diwali, #poster) and discard garbage noise
+// 3. Dictionary & Stop-Tag Sanitizer (Kills Gibberish)
+const isValidTag = (tag) => {
+  const clean = tag.replace("#", "").toLowerCase();
+  if (clean.length < 3) return false;
+  // Must contain at least one vowel or digit
+  if (!/[aeiou0-9]/.test(clean)) return false;
+  // Reject 3 consecutive identical characters (e.g. #xxx, #---)
+  if (/(.)\1\1/.test(clean)) return false;
+  // Reject common OCR noise artifacts
+  if (["npn", "wwn", "broic", "ji", "er", "te"].includes(clean)) return false;
+  return true;
+};
+
 const textTags = cleanText ? deriveTags(cleanText) : [];
 const headlineWordTags = validWords.slice(0, 4).map((w) => `#${w.toLowerCase()}`);
 const activeVisionTags = isTextDominant ? [] : (visionResult.tags || []);
+const idTags = structuredIds.map((id) => `#${id.value.toLowerCase()}`);
 
-const combinedTags = Array.from(new Set([
+const rawCombinedTags = [
   ...textTags,
   ...headlineWordTags,
   ...activeVisionTags,
-  ...(activePlate ? ["#vehicle", `#${activePlate}`] : []),
-  ...(isTextDominant && !activePlate ? ["#poster", "#graphic"] : ["#photo"]),
-]));
+  ...idTags,
+  ...(hasVehiclePlate ? ["#vehicle", `#${activePlate.toLowerCase()}`] : []),
+  ...(hasStructuredId ? ["#document"] : []),
+  ...(isTextDominant && !hasVehiclePlate && !hasStructuredId ? ["#poster", "#graphic"] : ["#photo"]),
+];
+
+const combinedTags = Array.from(new Set(rawCombinedTags.filter(isValidTag)));
+
+const finalOcrText = activePlate && !cleanText.includes(activePlate) 
+  ? `${activePlate}\n${cleanText}`.trim() 
+  : cleanText;
 
 await db.images.update(entry.id, {
-  ocr: cleanText,
-  isPureImage: !activePlate && !isTextDominant && cleanText.length === 0,
+  ocr: finalOcrText,
+  isPureImage: !hasVehiclePlate && !hasStructuredId && !isTextDominant && finalOcrText.length === 0,
   detectedObjects: isTextDominant ? [] : visionResult.labels,
   tags: combinedTags,
 });
