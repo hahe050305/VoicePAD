@@ -1,7 +1,7 @@
 ﻿import { HYPERLOCAL_COCO_TAGS } from "./visionTags.js";
 export { HYPERLOCAL_COCO_TAGS };
 
-export async function getDetectedLabelsAndTags(imageSource, threshold = 0.40) {
+function runVisionTask(type, imageSource, threshold = 0.40) {
   const task = visionQueue.then(async () => {
     if (visionIdleTimer) clearTimeout(visionIdleTimer);
     visionIdleTimer = null;
@@ -9,7 +9,7 @@ export async function getDetectedLabelsAndTags(imageSource, threshold = 0.40) {
     const id = ++visionRequestId;
     const result = new Promise((resolve, reject) => {
       visionRequests.set(id, { resolve, reject });
-      worker.postMessage({ id, imageSource, threshold });
+      worker.postMessage({ id, type, imageSource, threshold });
     });
     try {
       return await result;
@@ -25,6 +25,14 @@ export async function getDetectedLabelsAndTags(imageSource, threshold = 0.40) {
   });
   visionQueue = task.catch(() => {});
   return task;
+}
+
+export function createImageThumbnail(imageSource) {
+  return runVisionTask("thumbnail", imageSource);
+}
+
+export function getDetectedLabelsAndTags(imageSource, threshold = 0.40) {
+  return runVisionTask("detect", imageSource, threshold);
 }
 
 let visionWorker = null;

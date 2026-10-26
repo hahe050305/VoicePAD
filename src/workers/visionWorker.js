@@ -46,9 +46,7 @@ async function getDetector() {
 }
 
 async function makeInferenceUrl(imageSource) {
-  const blob = imageSource instanceof Blob
-    ? imageSource
-    : await (await fetch(imageSource)).blob();
+  const blob = await toBlob(imageSource);
   const bitmap = await createImageBitmap(blob);
   try {
     const maxDim = 640;
@@ -64,6 +62,27 @@ async function makeInferenceUrl(imageSource) {
     context.drawImage(bitmap, 0, 0, width, height);
     const resized = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.88 });
     return URL.createObjectURL(resized);
+  } finally {
+    bitmap.close();
+  }
+}
+
+async function toBlob(imageSource) {
+  return imageSource instanceof Blob ? imageSource : (await fetch(imageSource)).blob();
+}
+
+async function createThumbnail(imageSource) {
+  const bitmap = await createImageBitmap(await toBlob(imageSource));
+  try {
+    const maxDim = 480;
+    const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = new OffscreenCanvas(width, height);
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not prepare image preview.");
+    context.drawImage(bitmap, 0, 0, width, height);
+    return await canvas.convertToBlob({ type: "image/jpeg", quality: 0.78 });
   } finally {
     bitmap.close();
   }
@@ -100,7 +119,9 @@ async function detect(imageSource, threshold) {
 
 self.onmessage = async ({ data }) => {
   try {
-    const result = await detect(data.imageSource, data.threshold);
+    const result = data.type === "thumbnail"
+      ? await createThumbnail(data.imageSource)
+      : await detect(data.imageSource, data.threshold);
     self.postMessage({ id: data.id, result });
   } catch (error) {
     self.postMessage({ id: data.id, error: error?.message || "Vision detection failed." });
