@@ -1,44 +1,5 @@
-import { createWorker } from "tesseract.js";
-
-let workerInstance = null;
-let initPromise = null;
-let idleTimer = null;
-
-function resetIdleTimer() {
-  if (idleTimer) clearTimeout(idleTimer);
-  idleTimer = setTimeout(async () => {
-    if (workerInstance) {
-      try {
-        await workerInstance.terminate();
-        console.log("[OCR] Tesseract worker idle timeout -> terminated.");
-      } catch (_) {}
-      workerInstance = null;
-      initPromise = null;
-    }
-  }, 30000);
-}
-
-async function getWorker(onProgress) {
-  resetIdleTimer();
-  if (workerInstance) return workerInstance;
-  if (!initPromise) {
-    initPromise = (async () => {
-      const worker = await createWorker("eng", 1, {
-        logger: (m) => {
-          if (m.status === "recognizing text" && typeof onProgress === "function") {
-            onProgress(Math.round((m.progress || 0) * 100));
-          }
-        },
-      });
-      workerInstance = worker;
-      return worker;
-    })().catch((error) => {
-      initPromise = null;
-      throw error;
-    });
-  }
-  return initPromise;
-}
+import { runAggressiveANPR, parsePlateString } from "./services/plateService.js";
+import { recognizeWithTesseract } from "./services/tesseractService.js";
 
 export function isPureImageText(text) {
   if (!text || !text.trim()) return true;
@@ -54,43 +15,14 @@ export function isPureImageText(text) {
   return true;
 }
 
-/**
- * Intelligent Plate & Registration Extractor.
- * Extracts clean format like "BR01C J6440" or "BR01C".
- */
+const VALID_INDIAN_STATES = new Set([
+  "AP", "AR", "AS", "BR", "CG", "CH", "DD", "DL", "DN", "GA", "GJ", "HP", "HR",
+  "JH", "JK", "KA", "KL", "LA", "LD", "MH", "ML", "MN", "MP", "MZ", "NL", "OD",
+  "PB", "PY", "RJ", "SK", "TN", "TR", "TS", "UK", "UP", "WB"
+]);
+
 export function extractVehiclePlate(rawText) {
-  if (!rawText) return null;
-
-  let s = rawText.toUpperCase();
-
-  // Normalize common OCR character confusions:
-  s = s.replace(/([A-Z]{2})\s*O(\d)/g, "$1 0$2");
-  s = s.replace(/([A-Z]{2})\s*(\d)\s*O\b/g, "$1 $20");
-  s = s.replace(/([A-Z]{2})\s*I(\d)/g, "$1 1$2");
-  s = s.replace(/\bBRO1C\b/g, "BR01C");
-  s = s.replace(/\bBROIC\b/g, "BR01C");
-
-  // Remove non-alphanumeric
-  const compact = s.replace(/[^A-Z0-9]/g, "");
-
-  // 1. Full standard plate: 2 state letters + 1-2 digits + 0-3 letters + 3-4 digits (e.g. BR01CJ6440)
-  const fullMatch = compact.match(/([A-Z]{2}\d{1,2}[A-Z]{0,3}\d{3,4})/);
-  if (fullMatch) {
-    const val = fullMatch[1];
-    // Return with clean standard spacing: "BR01C J6440"
-    if (val.length >= 8) {
-      return `${val.slice(0, 5)} ${val.slice(5)}`;
-    }
-    return val;
-  }
-
-  // 2. Partial match: e.g. BR01C
-  const partialMatch = compact.match(/([A-Z]{2}\d{1,2}[A-Z]{1,2})/);
-  if (partialMatch && partialMatch[1].length >= 4) {
-    return partialMatch[1];
-  }
-
-  return null;
+  return parsePlateString(rawText);
 }
 
 export function extractStructuredIds(rawText) {
@@ -143,20 +75,18 @@ async function getOcrInput(file) {
   }
 }
 
-export async function prewarmOCR() {
-  try {
-    if (typeof window !== "undefined" && "TextDetector" in window) return;
-    await getWorker();
-  } catch (_) {}
-}
-
-/**
- * Runs OCR and returns strictly clean text without garbage lines.
- */
 export async function performOCR(file, onProgress) {
+  // 1. Aggressive Multi-Window ANPR Pass (Multi-crop + Contrast enhancement)
+  let detectedPlate = null;
+  try {
+    detectedPlate = await runAggressiveANPR(file);
+  } catch (_) {}
+
   const input = await getOcrInput(file);
   let nativeText = "";
   let tesseractText = "";
+  let tesseractRaw = "";
+  let tesseractConfidence = 0;
 
   if (typeof window !== "undefined" && "TextDetector" in window) {
     let bitmap;
@@ -171,35 +101,43 @@ export async function performOCR(file, onProgress) {
     }
   }
 
-  if (!nativeText || nativeText.length < 5) {
+  // Always run the general OCR fallback when ANPR found no plate; native text
+  // detection often returns unrelated scene text while missing small plates.
+  if (!nativeText || nativeText.length < 5 || !detectedPlate) {
     try {
-      const worker = await getWorker(onProgress);
-      const ret = await worker.recognize(input);
-      tesseractText = ret?.data?.text?.trim() || "";
-      resetIdleTimer();
+      const ret = await recognizeWithTesseract(input, { onProgress });
+      tesseractRaw = ret?.data?.text?.trim() || "";
+      const words = ret?.data?.words || [];
+      const readableWords = words
+        .filter((word) => Number(word.confidence) >= 45 && word.text?.trim())
+        .map((word) => word.text.trim());
+      tesseractText = words.length ? readableWords.join(" ") : tesseractRaw;
+      tesseractConfidence = Math.round(Number(ret?.data?.confidence) || 0);
     } catch (_) {}
   }
 
-  const fullRaw = `${nativeText}\n${tesseractText}`;
-  const plate = extractVehiclePlate(fullRaw);
+  const fullRaw = `${nativeText}\n${tesseractRaw}`;
+  const displayRaw = `${nativeText}\n${tesseractText}`;
+  const plate = detectedPlate?.plate || extractVehiclePlate(fullRaw);
   const structuredIds = extractStructuredIds(fullRaw);
 
-  // Filter out all OCR noise lines (e.g. "JI5OL", "eR Te", "ol npn NE", "a §")
-  const validWords = fullRaw
+  const WATERMARK_WORDS = new Set([
+    "shutterstock", "shutterstockcom", "getty", "gettyimages",
+    "alamy", "stock", "adobe", "adobestock", "depositphotos",
+    "vector", "watermark", "photo", "image", "copyright", "com"
+  ]);
+
+  const validWords = displayRaw
     .replace(/[^a-zA-Z\s]/g, " ")
     .split(/\s+/)
-    .map((w) => w.trim())
-    .filter((w) => w.length >= 3 && /[aeiou]/i.test(w));
+    .map((w) => w.trim().toLowerCase())
+    .filter((w) => w.length >= 3 && /[aeiou]/.test(w) && !WATERMARK_WORDS.has(w));
 
   const uniqueWords = Array.from(new Set(validWords));
 
-  // If a plate was detected, present the clean plate prominently without garbage lines
   let cleanDisplayText = "";
   if (plate) {
     cleanDisplayText = `Vehicle Plate: ${plate}`;
-    if (uniqueWords.length > 0) {
-      cleanDisplayText += `\n${uniqueWords.join(" ")}`;
-    }
   } else if (structuredIds.length > 0) {
     cleanDisplayText = structuredIds.map((id) => `${id.type.toUpperCase()}: ${id.value}`).join("\n");
   } else {
@@ -212,7 +150,7 @@ export async function performOCR(file, onProgress) {
     text: cleanDisplayText,
     rawText: cleanDisplayText,
     isPureImage: isPure,
-    confidence: plate || structuredIds.length > 0 ? 95 : 85,
+    confidence: plate ? (detectedPlate?.confidence ?? tesseractConfidence) : tesseractConfidence,
     plate,
     structuredIds,
   };

@@ -14,8 +14,10 @@ const semanticPatterns = [
   { pattern: /\b(fuel|petrol|diesel|filled|pump)\b/, tags: ["#fuel"] },
   { pattern: /\b(number\s*plate|license\s*plate|registration|rc\s*book|plate)\b/, tags: ["#vehicle", "#document"] },
   { pattern: /\b(drove|riding|drive|ride)\b/, tags: ["#vehicle"] },
-  // Match vehicle registration formats (e.g. BR01, DL04, MH12, etc.)
+  // Match standard vehicle registration formats (e.g. BR01, DL04, MH12, etc.)
   { pattern: /\b[A-Z]{2}\s*\d{1,2}\s*[A-Z]{0,3}\s*\d{3,4}\b/i, tags: ["#vehicle"] },
+  // Match Bharat (BH) series format: e.g. 22 BH 6517 A
+  { pattern: /\b\d{2}\s*BH\s*\d{2,4}\s*[A-Z]{1,2}\b/i, tags: ["#vehicle"] },
 
   // ── Festivals & Events ───────────────────────────────────────────────────
   { pattern: /\b(diwali|deepavali|festival|festive|crackers|diya|lights)\b/, tags: ["#festival", "#celebration"] },

@@ -9,6 +9,13 @@ db.version(1).stores({
   images: "id, type, blobUrl, ocr, *tags, timestamp",
 });
 
+// New image records store their binary data as a Blob, avoiding base64 expansion.
+// Keep legacy blobUrl values intact while removing the unnecessary index.
+db.version(2).stores({
+  notes: "id, type, *tags, timestamp",
+  images: "id, type, ocr, *tags, timestamp",
+});
+
 /** Seed demo data strictly once without generating duplicate cards */
 export async function seedDemoData() {
   const noteCount = await db.notes.count();
