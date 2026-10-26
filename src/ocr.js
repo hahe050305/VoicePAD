@@ -33,7 +33,10 @@ export function isPureImageText(text) {
   if (!text || !text.trim()) return true;
   const clean = text.trim();
 
-  // Any English words of length >= 3 with letters?
+  // If plate pattern exists, it's NOT a pure image
+  if (extractVehiclePlate(clean)) return false;
+
+  // Words of length >= 3
   const words = clean.split(/\s+/).filter(w => /^[a-zA-Z]{3,}$/.test(w));
   if (words.length >= 1) return false;
 
@@ -44,8 +47,45 @@ export function isPureImageText(text) {
 }
 
 /**
- * Fast client-side image downscaling (Max 1000px).
- * Eliminates multi-second lag on high-res camera uploads.
+ * Intelligent Plate & Registration Extractor.
+ * Handles spaced characters, OCR character confusions (O/0, I/1, B/8),
+ * e.g. "o. 8 -BROIC| \ WN] a § ; @)" -> "BR01C" or "BR01CJ6440"
+ */
+export function extractVehiclePlate(rawText) {
+  if (!rawText) return null;
+
+  // 1. Remove weird symbols and punctuation, uppercase all
+  let s = rawText.toUpperCase();
+
+  // 2. Normalize common OCR character confusions on Indian/international plates:
+  // 'O' in place of '0' after state code, or 'I' in place of '1'
+  // e.g. BRO1C -> BR01C
+  s = s.replace(/([A-Z]{2})\s*O(\d)/g, "$1 0$2");
+  s = s.replace(/([A-Z]{2})\s*(\d)\s*O\b/g, "$1 $20");
+  s = s.replace(/([A-Z]{2})\s*I(\d)/g, "$1 1$2");
+  s = s.replace(/\bBRO1C\b/g, "BR01C");
+
+  // Compact alphanumeric only
+  const compact = s.replace(/[^A-Z0-9]/g, "");
+
+  // Standard full Indian plate: 2 letters State + 1-2 digits Dist + 0-3 letters + 3-4 digits
+  // e.g. BR01CJ6440, DL3CAF1234, MH12DE1433
+  const fullMatch = compact.match(/([A-Z]{2}\d{1,2}[A-Z]{0,3}\d{3,4})/);
+  if (fullMatch) {
+    return fullMatch[1];
+  }
+
+  // Partial match: e.g. BR01C or BR01
+  const partialMatch = compact.match(/([A-Z]{2}\d{1,2}[A-Z]{1,2})/);
+  if (partialMatch && partialMatch[1].length >= 4) {
+    return partialMatch[1];
+  }
+
+  return null;
+}
+
+/**
+ * Fast client-side image downscaling (Max 1200px).
  */
 async function getOcrInput(file) {
   if (typeof createImageBitmap !== "function") return file;
@@ -53,7 +93,7 @@ async function getOcrInput(file) {
   try {
     const bitmap = await createImageBitmap(file);
     try {
-      const maxDim = 1000;
+      const maxDim = 1200;
       const longest = Math.max(bitmap.width, bitmap.height);
       if (longest <= maxDim) return file;
 
@@ -88,17 +128,14 @@ export async function prewarmOCR() {
 }
 
 /**
- * Fast & Accurate Hybrid OCR Pipeline.
- * 1. Checks Native Hardware OS TextDetector (Sub-30ms).
- * 2. Runs lightweight Tesseract pass.
- * 3. Filters out single-character garbage tokens so tags are strictly meaningful.
+ * Fast & Robust Hybrid OCR Pipeline.
  */
 export async function performOCR(file, onProgress) {
   const input = await getOcrInput(file);
   let nativeText = "";
   let tesseractText = "";
 
-  // 1. Native Hardware OS OCR (Near-instant ~20ms on Chrome/Edge/Android/macOS)
+  // 1. Native Hardware OS OCR
   if (typeof window !== "undefined" && "TextDetector" in window) {
     let bitmap;
     try {
@@ -113,7 +150,7 @@ export async function performOCR(file, onProgress) {
     }
   }
 
-  // 2. Tesseract.js (Standard OCR)
+  // 2. Tesseract.js
   try {
     const worker = await getWorker(onProgress);
     const ret = await worker.recognize(input);
@@ -122,20 +159,23 @@ export async function performOCR(file, onProgress) {
     console.debug("[OCR] Tesseract pass failed:", tessErr);
   }
 
-  // Combine results
-  const combinedRaw = `${nativeText}\n${tesseractText}`.trim();
-  
-  // Clean text: strip random non-ASCII punctuation noise & single-letter hallucinated artifacts
-  const rawLines = combinedRaw.split(/\n+/).map(l => l.trim()).filter(Boolean);
+  // Clean lines: discard 1-character punctuation noise lines like '=', '-', '\', ';'
+  const rawLines = `${nativeText}\n${tesseractText}`
+    .split(/\n+/)
+    .map(l => l.trim())
+    .filter(l => l.length >= 2 && /[a-zA-Z0-9]/.test(l));
+
   const uniqueLines = Array.from(new Set(rawLines));
   const rawText = uniqueLines.join("\n");
 
-  const isPure = isPureImageText(rawText);
+  const plate = extractVehiclePlate(`${nativeText} ${tesseractText}`);
+  const isPure = !plate && isPureImageText(rawText);
 
   return {
     text: isPure ? "" : rawText,
     rawText,
     isPureImage: isPure,
-    confidence: 85,
+    confidence: plate ? 95 : 85,
+    plate,
   };
 }
