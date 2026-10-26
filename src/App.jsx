@@ -92,9 +92,9 @@ export default function App() {
     // Initialize LLM in the background
     initLLM();
 
-    prewarmOCR();
-    prewarmDetector();
-    prewarmDeepLearningOCR();
+   // prewarmOCR();
+    //prewarmDetector();
+  //  prewarmDeepLearningOCR();
     return () => {
       unsub();
       if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);

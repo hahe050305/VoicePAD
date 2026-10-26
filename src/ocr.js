@@ -2,8 +2,25 @@ import { createWorker } from "tesseract.js";
 
 let workerInstance = null;
 let initPromise = null;
+let idleTimer = null;
+
+// Auto-terminate Tesseract worker after 30 seconds of inactivity to free ~100MB of RAM
+function resetIdleTimer() {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(async () => {
+    if (workerInstance) {
+      try {
+        await workerInstance.terminate();
+        console.log("[OCR] Tesseract worker idle timeout -> terminated to free memory.");
+      } catch (_) {}
+      workerInstance = null;
+      initPromise = null;
+    }
+  }, 30000);
+}
 
 async function getWorker(onProgress) {
+  resetIdleTimer();
   if (workerInstance) {
     return workerInstance;
   }
@@ -81,7 +98,7 @@ export function extractVehiclePlate(rawText) {
 
 /**
  * Compact Structured ID Matcher.
- * Matches Aadhaar, PAN card, Driving Licenses, SSN across multi-line or spaced tokens.
+ * Matches Aadhaar, PAN card, Driving Licenses across multi-line or spaced tokens.
  */
 export function extractStructuredIds(rawText) {
   if (!rawText) return [];
@@ -105,7 +122,8 @@ export function extractStructuredIds(rawText) {
 }
 
 /**
- * Fast client-side image downscaling (Max 1200px).
+ * Fast client-side image downscaling (Max 1000px).
+ * Prevents memory leaks by ensuring bitmaps are closed and GC'd.
  */
 async function getOcrInput(file) {
   if (typeof createImageBitmap !== "function") return file;
@@ -113,7 +131,7 @@ async function getOcrInput(file) {
   try {
     const bitmap = await createImageBitmap(file);
     try {
-      const maxDim = 1200;
+      const maxDim = 1000;
       const longest = Math.max(bitmap.width, bitmap.height);
       if (longest <= maxDim) return file;
 
@@ -129,21 +147,17 @@ async function getOcrInput(file) {
 
       ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
       const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+      
+      // Clean up canvas references
+      canvas.width = 0;
+      canvas.height = 0;
+      
       return blob || file;
     } finally {
       bitmap.close();
     }
   } catch {
     return file;
-  }
-}
-
-export async function prewarmOCR() {
-  try {
-    if (typeof window !== "undefined" && "TextDetector" in window) return;
-    await getWorker();
-  } catch (err) {
-    console.debug("[OCR] Pre-warm fail:", err);
   }
 }
 
@@ -155,7 +169,7 @@ export async function performOCR(file, onProgress) {
   let nativeText = "";
   let tesseractText = "";
 
-  // 1. Native Hardware OS OCR
+  // 1. Native Hardware OS OCR (Near-instant ~20ms, 0 RAM overhead)
   if (typeof window !== "undefined" && "TextDetector" in window) {
     let bitmap;
     try {
@@ -170,13 +184,16 @@ export async function performOCR(file, onProgress) {
     }
   }
 
-  // 2. Tesseract.js
-  try {
-    const worker = await getWorker(onProgress);
-    const ret = await worker.recognize(input);
-    tesseractText = ret?.data?.text?.trim() || "";
-  } catch (tessErr) {
-    console.debug("[OCR] Tesseract pass failed:", tessErr);
+  // 2. Tesseract.js (Only invoked if native text is sparse)
+  if (!nativeText || nativeText.length < 5) {
+    try {
+      const worker = await getWorker(onProgress);
+      const ret = await worker.recognize(input);
+      tesseractText = ret?.data?.text?.trim() || "";
+      resetIdleTimer();
+    } catch (tessErr) {
+      console.debug("[OCR] Tesseract pass failed:", tessErr);
+    }
   }
 
   // Clean lines: discard 1-character punctuation noise lines

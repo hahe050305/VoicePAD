@@ -1,21 +1,34 @@
 // src/services/deepOcrService.js
 // Client-side manager for our dedicated off-thread Web Worker.
-// Keeps the main UI completely fluid and responsive during inference.
+// Includes auto-termination after idle timeout to drop RAM consumption.
 
 let workerInstance = null;
 let jobId = 0;
+let idleTimer = null;
 const pendingJobs = new Map();
 
+function resetIdleTimer() {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    if (workerInstance && pendingJobs.size === 0) {
+      workerInstance.terminate();
+      workerInstance = null;
+      console.log("[deepOcrService] Worker terminated after idle timeout to reclaim RAM.");
+    }
+  }, 25000);
+}
+
 function getWorker() {
+  resetIdleTimer();
   if (workerInstance) return workerInstance;
 
-  // Instantiate standard Vite-supported ES module worker
   workerInstance = new Worker(
     new URL("../workers/ocrWorker.js", import.meta.url),
     { type: "module" }
   );
 
   workerInstance.onmessage = (e) => {
+    resetIdleTimer();
     const { id, type, rawText, plate, error } = e.data;
     if (type === "PREWARM_DONE") return;
 
@@ -37,39 +50,30 @@ function getWorker() {
   return workerInstance;
 }
 
-/**
- * Pre-warms the worker and model in the background during idle time.
- */
 export function prewarmDeepLearningOCR() {
-  try {
-    const worker = getWorker();
-    worker.postMessage({ type: "PREWARM", id: ++jobId });
-  } catch (err) {
-    console.debug("[deepOcrService] Pre-warm failed:", err);
-  }
+  // Deliberately no-op on initial page load to save 120MB+ RAM until user uploads an image
 }
 
-/**
- * Executes Deep Learning OCR completely off the main thread.
- * Returns { rawText, plate } without blocking UI renders or interactions.
- */
-export async function runDeepOcrInWorker(imageSource, timeoutMs = 12000) {
+export async function runDeepOcrInWorker(imageSource, timeoutMs = 10000) {
   const worker = getWorker();
   const currentId = ++jobId;
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pendingJobs.delete(currentId);
+      resetIdleTimer();
       reject(new Error("OCR worker execution timed out"));
     }, timeoutMs);
 
     pendingJobs.set(currentId, {
       resolve: (data) => {
         clearTimeout(timer);
+        resetIdleTimer();
         resolve(data);
       },
       reject: (err) => {
         clearTimeout(timer);
+        resetIdleTimer();
         reject(err);
       },
     });
@@ -82,10 +86,6 @@ export async function runDeepOcrInWorker(imageSource, timeoutMs = 12000) {
   });
 }
 
-/**
- * Normalizes vehicle registration plates (Indian & international standard alphanumeric)
- * e.g., "BR 01 C J 6440" -> "BR01CJ6440"
- */
 export function normalizeRegistrationPlate(text) {
   if (!text) return null;
   const compact = text.toUpperCase().replace(/[^A-Z0-9]/g, "");
