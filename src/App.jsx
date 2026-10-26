@@ -70,6 +70,7 @@ export default function App() {
   const recognizerRef = useRef(null);
   const fileInputRef = useRef(null);
   const searchDebounceRef = useRef(null);
+  const imageProcessingQueueRef = useRef(Promise.resolve());
 
   //const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
@@ -351,14 +352,6 @@ export default function App() {
   };
 
   // ── Image Capture / OCR ──────────────────────────────────────────────────────
-  const readFileAsDataUrl = (file) =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-
   const extractTagsFromText = (text) => {
     if (!text || !text.trim()) return ["#image", "#photo"];
     const tags = deriveTags(text);
@@ -368,16 +361,18 @@ export default function App() {
   const handleImageCapture = async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
+    // Clear immediately so the same selection can be added again while this
+    // batch is being indexed in the background.
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (cameraInputRef.current) cameraInputRef.current.value = "";
 
     try {
-      // 1. Instantly read all files to data URLs
-      const dataUrls = await Promise.all(files.map((file) => readFileAsDataUrl(file)));
-
-      // 2. Prepare immediate image entries with default photo tags
-      const newEntries = dataUrls.map((dataUrl, i) => ({
+      // Store the selected files as Blobs; this avoids creating and retaining
+      // base64 copies of every selected image in memory.
+      const newEntries = files.map((file, i) => ({
         id: createId(),
         type: "image",
-        blobUrl: dataUrl,
+        imageBlob: file,
         label: "",
         ocr: "",
         isPureImage: true, // Default to true so it renders instantly as a photo placeholder
@@ -392,10 +387,6 @@ export default function App() {
       setAllEntries(sorted);
       setFilteredEntries(sorted.slice(0, 20));
 
-      // Reset file input so user can pick again immediately
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      if (cameraInputRef.current) cameraInputRef.current.value = "";
-
       // 4. Trigger top-right reminder popup on every unlabelled image after a few seconds
       if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);
       reminderTimerRef.current = setTimeout(() => {
@@ -403,87 +394,69 @@ export default function App() {
       }, 2500);
 
       // 4. Run OCR pipeline SILENTLY in the background without blocking or showing progress
-      (async () => {
+      const processingTask = imageProcessingQueueRef.current.then(async () => {
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
           const entry = newEntries[i];
-          const dataUrl = dataUrls[i];
           try {
             console.log(`[Vision] Processing image ${i + 1}/${files.length}...`);
             // Run OCR first, then detect objects.
-            // Run OCR (off-thread worker, never freezes UI)
-// 1. Fast Native + Tesseract OCR (<150ms total)
-// 1. Fast Native + Tesseract OCR (<150ms total)
-const ocrResult = await performOCR(file).catch((err) => {
-  console.warn("[Vision] OCR error:", err);
-  return "";
-});
+            const ocrResult = await performOCR(file).catch((err) => {
+              console.warn("[Vision] OCR error:", err);
+              return "";
+            });
 
-const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
-const activePlate = typeof ocrResult === "object" && ocrResult?.plate ? ocrResult.plate : null;
-const structuredIds = typeof ocrResult === "object" && Array.isArray(ocrResult?.structuredIds) ? ocrResult.structuredIds : [];
-const cleanText = extractedText.trim();
+            const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
+            const activePlate = typeof ocrResult === "object" && ocrResult?.plate ? ocrResult.plate : null;
+            const structuredIds = typeof ocrResult === "object" && Array.isArray(ocrResult?.structuredIds) ? ocrResult.structuredIds : [];
+            const cleanText = extractedText.trim();
+            const validWords = cleanText
+              .replace(/[^a-zA-Z\s]/g, " ")
+              .split(/\s+/)
+              .filter((word) => word.length >= 3);
 
-// Extract genuine words (length >= 3, alphabetic, e.g. "happy", "diwali")
-const validWords = cleanText
-  .replace(/[^a-zA-Z\s]/g, " ")
-  .split(/\s+/)
-  .filter((word) => word.length >= 3);
+            const hasVehiclePlate = !!activePlate;
+            const hasStructuredId = structuredIds.length > 0;
+            const isTextDominant = hasVehiclePlate || hasStructuredId || validWords.length >= 2;
 
-// Mark as structured document/plate if plate or national ID exists
-const hasVehiclePlate = !!activePlate;
-const hasStructuredId = structuredIds.length > 0;
-const isTextDominant = hasVehiclePlate || hasStructuredId || validWords.length >= 2;
+            let visionResult = { labels: [], tags: [], detections: [] };
+            if (!isTextDominant) {
+              visionResult = await getDetectedLabelsAndTags(file).catch((err) => {
+                console.warn("[Vision] Vision detection error:", err);
+                return { labels: [], tags: [], detections: [] };
+              });
+            }
 
-// 2. YOLO Object detection: ONLY run for photos WITHOUT dominant text, plates, or IDs
-let visionResult = { labels: [], tags: [], detections: [] };
-if (!isTextDominant) {
-  visionResult = await getDetectedLabelsAndTags(dataUrl).catch((err) => {
-    console.warn("[Vision] Vision detection error:", err);
-    return { labels: [], tags: [], detections: [] };
-  });
-}
+            const isValidTag = (tag) => {
+              const clean = tag.replace("#", "").toLowerCase();
+              if (clean.length < 3 || !/[aeiou0-9]/.test(clean) || /(.)\1\1/.test(clean)) return false;
+              return !["npn", "wwn", "broic", "ji", "er", "te"].includes(clean);
+            };
 
-// 3. Dictionary & Stop-Tag Sanitizer (Kills Gibberish)
-const isValidTag = (tag) => {
-  const clean = tag.replace("#", "").toLowerCase();
-  if (clean.length < 3) return false;
-  // Must contain at least one vowel or digit
-  if (!/[aeiou0-9]/.test(clean)) return false;
-  // Reject 3 consecutive identical characters (e.g. #xxx, #---)
-  if (/(.)\1\1/.test(clean)) return false;
-  // Reject common OCR noise artifacts
-  if (["npn", "wwn", "broic", "ji", "er", "te"].includes(clean)) return false;
-  return true;
-};
+            const textTags = cleanText ? deriveTags(cleanText) : [];
+            const headlineWordTags = validWords.slice(0, 4).map((word) => `#${word.toLowerCase()}`);
+            const activeVisionTags = isTextDominant ? [] : (visionResult.tags || []);
+            const idTags = structuredIds.map((id) => `#${id.value.toLowerCase()}`);
+            const rawCombinedTags = [
+              ...textTags,
+              ...headlineWordTags,
+              ...activeVisionTags,
+              ...idTags,
+              ...(hasVehiclePlate ? ["#vehicle", `#${activePlate.toLowerCase()}`] : []),
+              ...(hasStructuredId ? ["#document"] : []),
+              ...(isTextDominant && !hasVehiclePlate && !hasStructuredId ? ["#poster", "#graphic"] : ["#photo"]),
+            ];
+            const combinedTags = Array.from(new Set(rawCombinedTags.filter(isValidTag)));
+            const finalOcrText = activePlate && !cleanText.includes(activePlate)
+              ? `${activePlate}\n${cleanText}`.trim()
+              : cleanText;
 
-const textTags = cleanText ? deriveTags(cleanText) : [];
-const headlineWordTags = validWords.slice(0, 4).map((w) => `#${w.toLowerCase()}`);
-const activeVisionTags = isTextDominant ? [] : (visionResult.tags || []);
-const idTags = structuredIds.map((id) => `#${id.value.toLowerCase()}`);
-
-const rawCombinedTags = [
-  ...textTags,
-  ...headlineWordTags,
-  ...activeVisionTags,
-  ...idTags,
-  ...(hasVehiclePlate ? ["#vehicle", `#${activePlate.toLowerCase()}`] : []),
-  ...(hasStructuredId ? ["#document"] : []),
-  ...(isTextDominant && !hasVehiclePlate && !hasStructuredId ? ["#poster", "#graphic"] : ["#photo"]),
-];
-
-const combinedTags = Array.from(new Set(rawCombinedTags.filter(isValidTag)));
-
-const finalOcrText = activePlate && !cleanText.includes(activePlate) 
-  ? `${activePlate}\n${cleanText}`.trim() 
-  : cleanText;
-
-await db.images.update(entry.id, {
-  ocr: finalOcrText,
-  isPureImage: !hasVehiclePlate && !hasStructuredId && !isTextDominant && finalOcrText.length === 0,
-  detectedObjects: isTextDominant ? [] : visionResult.labels,
-  tags: combinedTags,
-});
+            await db.images.update(entry.id, {
+              ocr: finalOcrText,
+              isPureImage: !hasVehiclePlate && !hasStructuredId && !isTextDominant && finalOcrText.length === 0,
+              detectedObjects: isTextDominant ? [] : visionResult.labels,
+              tags: combinedTags,
+            });
           } catch (err) {
             console.error("[Vision] Silent background processing failed:", err);
           }
@@ -498,7 +471,8 @@ await db.images.update(entry.id, {
         } else {
           setFilteredEntries(refreshedSorted.slice(0, 20));
         }
-      })().catch((err) => {
+      });
+      imageProcessingQueueRef.current = processingTask.catch((err) => {
         console.error("[Vision] Background image processing failed:", err);
       });
     } catch (err) {
@@ -655,7 +629,7 @@ await db.images.update(entry.id, {
           </button>
         </div>
 
-        {/* Image Capture — supports instant multiple image selection */}
+        {/* Image Capture — gallery supports selecting multiple images */}
         <div className="w-full flex items-center justify-center gap-3 my-2">
           <input
     ref={fileInputRef}
@@ -688,7 +662,7 @@ await db.images.update(entry.id, {
     className="flex-1 max-w-[170px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-medium border transition shadow-sm bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-slate-700 text-slate-200 active:scale-95"
   >
     <span className="text-base">📁</span>
-    <span>Upload Photo</span>
+    <span>Upload Photos</span>
   </button>
         </div>
 

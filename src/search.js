@@ -133,11 +133,28 @@ export function normalizeQuery(query) {
 
 let cachedEntries = [];
 let cacheLoaded = false;
+const imageObjectUrls = new Map();
 
 export async function refreshCache() {
   const notes = await db.notes.toArray();
   const images = await db.images.toArray();
-  cachedEntries = [...notes, ...images];
+  const liveImageIds = new Set(images.map((image) => image.id));
+  for (const [id, url] of imageObjectUrls) {
+    if (!liveImageIds.has(id)) {
+      URL.revokeObjectURL(url);
+      imageObjectUrls.delete(id);
+    }
+  }
+  const displayImages = images.map((image) => {
+    if (!(image.imageBlob instanceof Blob)) return image;
+    let url = imageObjectUrls.get(image.id);
+    if (!url) {
+      url = URL.createObjectURL(image.imageBlob);
+      imageObjectUrls.set(image.id, url);
+    }
+    return { ...image, blobUrl: url };
+  });
+  cachedEntries = [...notes, ...displayImages];
   cacheLoaded = true;
   return cachedEntries;
 }
