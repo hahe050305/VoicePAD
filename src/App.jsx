@@ -1,11 +1,11 @@
 // src/App.jsx
 import { useEffect, useState, useRef, useCallback } from "react";
 import { db, seedDemoData } from "./db.js";
-import { rankedSearch, fastSearch, refreshCache } from "./search.js";
+import { rankedSearch, fastSearch, refreshCache, getImageThumbnailUrl } from "./search.js";
 import { performOCR, isPureImageText } from "./ocr.js";
 import { deriveTags } from "./tagger.js";
 import { initLLM, subscribeLLMStatus } from "./llmService.js";
-import { getDetectedLabelsAndTags} from "./services/visionService.js";
+import { createImageThumbnail, getDetectedLabelsAndTags } from "./services/visionService.js";
 import { createId } from "./id.js";
 
 export default function App() {
@@ -71,9 +71,55 @@ export default function App() {
   const fileInputRef = useRef(null);
   const searchDebounceRef = useRef(null);
   const imageProcessingQueueRef = useRef(Promise.resolve());
+  const thumbnailJobsRef = useRef(new Set());
 
   //const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
+
+  const enqueueThumbnailBackfill = useCallback((entries) => {
+    const candidates = entries.filter((entry) =>
+      entry.type === "image" &&
+      !entry.thumbnailUrl &&
+      !entry.thumbnailFailed &&
+      !thumbnailJobsRef.current.has(entry.id)
+    );
+    if (candidates.length === 0) return;
+    candidates.forEach((entry) => thumbnailJobsRef.current.add(entry.id));
+
+    const task = imageProcessingQueueRef.current.then(async () => {
+      for (const entry of candidates) {
+        try {
+          const source = entry.imageBlob || entry.blobUrl;
+          const thumbnail = await createImageThumbnail(source);
+          if (thumbnail) {
+            await db.images.update(entry.id, { thumbnailBlob: thumbnail });
+          } else {
+            await db.images.update(entry.id, { thumbnailFailed: true });
+          }
+          const thumbnailUrl = thumbnail ? getImageThumbnailUrl(entry.id, thumbnail) : null;
+          const updatePreview = (image) => image.id === entry.id
+            ? { ...image, thumbnailBlob: thumbnail, thumbnailUrl, thumbnailFailed: !thumbnail }
+            : image;
+          setFilteredEntries((current) => current.map(updatePreview));
+          setSelectedEntry((current) => current?.id === entry.id ? updatePreview(current) : current);
+        } catch (error) {
+          console.warn("[Vision] Could not prepare saved image preview:", error);
+          await db.images.update(entry.id, { thumbnailFailed: true });
+          setFilteredEntries((current) => current.map((image) =>
+            image.id === entry.id ? { ...image, thumbnailFailed: true } : image
+          ));
+        } finally {
+          thumbnailJobsRef.current.delete(entry.id);
+        }
+      }
+      const refreshed = await refreshCache();
+      setAllEntries([...refreshed].sort((a, b) => b.timestamp - a.timestamp));
+    });
+    imageProcessingQueueRef.current = task.catch((error) => {
+      console.error("[Vision] Saved image preview backfill failed:", error);
+      candidates.forEach((entry) => thumbnailJobsRef.current.delete(entry.id));
+    });
+  }, []);
 
   // Load initial entries
   const loadEntries = useCallback(async () => {
@@ -100,6 +146,10 @@ export default function App() {
       if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);
     };
   }, [loadEntries]);
+
+  useEffect(() => {
+    enqueueThumbnailBackfill(filteredEntries);
+  }, [filteredEntries, enqueueThumbnailBackfill]);
 
   // ── Voice recognition ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -379,6 +429,7 @@ export default function App() {
         tags: ["#image", "#photo"],
         timestamp: Date.now() + i,
       }));
+      newEntries.forEach((entry) => thumbnailJobsRef.current.add(entry.id));
 
       // 3. Immediately store to database and update UI
       await db.images.bulkAdd(newEntries);
@@ -400,6 +451,23 @@ export default function App() {
           const entry = newEntries[i];
           try {
             console.log(`[Vision] Processing image ${i + 1}/${files.length}...`);
+            const thumbnail = await createImageThumbnail(file).catch((err) => {
+              console.warn("[Vision] Thumbnail creation failed:", err);
+              return null;
+            });
+            let previewUrl = null;
+            if (thumbnail) {
+              await db.images.update(entry.id, { thumbnailBlob: thumbnail });
+              previewUrl = getImageThumbnailUrl(entry.id, thumbnail);
+            } else {
+              await db.images.update(entry.id, { thumbnailFailed: true });
+            }
+            const updatePreview = (image) => image.id === entry.id
+              ? { ...image, thumbnailBlob: thumbnail, thumbnailUrl: previewUrl, thumbnailFailed: !thumbnail }
+              : image;
+            setFilteredEntries((current) => current.map(updatePreview));
+            setSelectedEntry((current) => current?.id === entry.id ? updatePreview(current) : current);
+
             // Run OCR first, then detect objects.
             const ocrResult = await performOCR(file).catch((err) => {
               console.warn("[Vision] OCR error:", err);
@@ -459,6 +527,8 @@ export default function App() {
             });
           } catch (err) {
             console.error("[Vision] Silent background processing failed:", err);
+          } finally {
+            thumbnailJobsRef.current.delete(entry.id);
           }
         }
         // Re-sync UI state so the new tags immediately appear on the cards!
@@ -474,6 +544,7 @@ export default function App() {
       });
       imageProcessingQueueRef.current = processingTask.catch((err) => {
         console.error("[Vision] Background image processing failed:", err);
+        newEntries.forEach((entry) => thumbnailJobsRef.current.delete(entry.id));
       });
     } catch (err) {
       console.error("Real‑timeimage upload failed:", err);
@@ -923,12 +994,21 @@ export default function App() {
                           </div>
                         ) : entry.type === "image" ? (
                           <div className="mt-1 space-y-2">
-                            <div className="w-full max-h-80 rounded-xl overflow-hidden bg-slate-950 border border-slate-800/90 flex items-center justify-center p-1">
-                              <img
-                                src={entry.blobUrl}
-                                alt={entry.label || "Image"}
-                                className="max-h-72 max-w-full object-contain rounded-lg"
-                              />
+                            <div className="w-full aspect-[4/3] max-h-80 rounded-xl overflow-hidden bg-slate-950 border border-slate-800/90 flex items-center justify-center p-1">
+                              {entry.thumbnailUrl ? (
+                                <img
+                                  src={entry.thumbnailUrl}
+                                  alt={entry.label || "Image"}
+                                  loading="lazy"
+                                  decoding="async"
+                                  fetchPriority="low"
+                                  className="max-h-72 max-w-full object-contain rounded-lg"
+                                />
+                              ) : (
+                                <span className="px-4 text-center text-xs text-slate-500">
+                                  {entry.thumbnailFailed ? "Preview unavailable · tap to open" : "Preparing preview…"}
+                                </span>
+                              )}
                             </div>
                             {!isPureImage && ocrExpandedId === entry.id && entry.ocr && (
                               <p
@@ -1096,6 +1176,8 @@ export default function App() {
                     <img
                       src={modalEntry.blobUrl}
                       alt={modalEntry.label || "Image"}
+                      loading="eager"
+                      decoding="async"
                       className="max-h-[68vh] w-full object-contain rounded-lg"
                     />
                   </div>

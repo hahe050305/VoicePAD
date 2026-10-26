@@ -134,6 +134,16 @@ export function normalizeQuery(query) {
 let cachedEntries = [];
 let cacheLoaded = false;
 const imageObjectUrls = new Map();
+const imageThumbnailUrls = new Map();
+
+export function getImageThumbnailUrl(imageId, thumbnailBlob) {
+  let url = imageThumbnailUrls.get(imageId);
+  if (!url) {
+    url = URL.createObjectURL(thumbnailBlob);
+    imageThumbnailUrls.set(imageId, url);
+  }
+  return url;
+}
 
 export async function refreshCache() {
   const notes = await db.notes.toArray();
@@ -145,14 +155,26 @@ export async function refreshCache() {
       imageObjectUrls.delete(id);
     }
   }
-  const displayImages = images.map((image) => {
-    if (!(image.imageBlob instanceof Blob)) return image;
-    let url = imageObjectUrls.get(image.id);
-    if (!url) {
-      url = URL.createObjectURL(image.imageBlob);
-      imageObjectUrls.set(image.id, url);
+  for (const [id, url] of imageThumbnailUrls) {
+    if (!liveImageIds.has(id)) {
+      URL.revokeObjectURL(url);
+      imageThumbnailUrls.delete(id);
     }
-    return { ...image, blobUrl: url };
+  }
+  const displayImages = images.map((image) => {
+    let blobUrl = image.blobUrl;
+    let thumbnailUrl;
+    if (image.imageBlob instanceof Blob) {
+      blobUrl = imageObjectUrls.get(image.id);
+      if (!blobUrl) {
+        blobUrl = URL.createObjectURL(image.imageBlob);
+        imageObjectUrls.set(image.id, blobUrl);
+      }
+    }
+    if (image.thumbnailBlob instanceof Blob) {
+      thumbnailUrl = getImageThumbnailUrl(image.id, image.thumbnailBlob);
+    }
+    return { ...image, blobUrl, thumbnailUrl };
   });
   cachedEntries = [...notes, ...displayImages];
   cacheLoaded = true;
