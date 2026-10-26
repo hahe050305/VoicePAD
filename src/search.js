@@ -33,9 +33,9 @@ const TERM_SYNONYMS = {
   car: ["car", "automobile", "fourwheeler", "suv"],
   automobile: ["automobile", "car"],
   truck: ["truck"],
-  vehicle: ["vehicle", "car", "truck", "motorcycle", "bicycle", "bike", "scooty", "scooter", "bus"],
+  vehicle: ["vehicle", "car", "truck", "motorcycle", "bicycle", "bike", "scooty", "scooter", "bus", "plate", "numberplate"],
   plate: ["plate", "numberplate", "license", "registration", "vehicle"],
-  numberplate: ["numberplate", "plate", "license", "registration", "vehicle"],
+  numberplate: ["numberplate", "plate", "license", "registration", "vehicle", "bike", "car"],
   phone: ["phone", "cellphone", "cell phone", "mobile"],
   cell: ["cell", "cellphone", "cell phone", "phone"],
   cellphone: ["cellphone", "cell phone", "phone", "mobile"],
@@ -78,7 +78,6 @@ function wordsIn(text) {
   return (text.toLowerCase().match(/[a-z0-9]+/g) || []).map(normalizeWord);
 }
 
-// Bounded edit distance for typos and short queries
 function editDistanceAtMost(a, b, limit) {
   if (Math.abs(a.length - b.length) > limit) return limit + 1;
   let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
@@ -101,12 +100,9 @@ function editDistanceAtMost(a, b, limit) {
 
 function fuzzyWordMatch(queryWord, candidateWord) {
   if (queryWord === candidateWord) return 2;
-  // Substring match: if query is at least 3 chars and is contained in candidate
   if (queryWord.length >= 3 && candidateWord.includes(queryWord)) return 1.5;
   if (candidateWord.length >= 3 && queryWord.includes(candidateWord)) return 1.5;
 
-  // Typo tolerance:
-  // For 3-5 letter words, allow 1 edit (e.g. biek -> bike, plte -> plate, bro1 -> br01)
   const maxLen = Math.max(queryWord.length, candidateWord.length);
   const minLen = Math.min(queryWord.length, candidateWord.length);
   if (minLen >= 3) {
@@ -125,9 +121,6 @@ function wordMatch(queryWord, candidateWords) {
   return best;
 }
 
-/**
- * Normalizes query: handles spaced words, typos, short forms, and aliases.
- */
 export function normalizeQuery(query) {
   if (!query) return [];
   const rawWords = wordsIn(query);
@@ -154,7 +147,7 @@ export function getCachedEntries() {
 }
 
 /**
- * Scores an entry against query tokens with robust typo & spaced-word mapping.
+ * Scores an entry against query tokens with Priority Boosting for real images on visual queries.
  */
 function scoreEntry(entry, tokens, llmIntent = null) {
   let score = 0;
@@ -191,14 +184,14 @@ function scoreEntry(entry, tokens, llmIntent = null) {
     effectiveTags.add("#picture");
   }
 
-  const isPhotoQuery = queryTerms.some((term) =>
-    PHOTO_INTENT_TERMS.has(term)
-  ) || queryTags.some((tag) => ["#photo", "#selfie", "#image", "#picture"].includes(tag));
+  // Detect visual/entity query intent (e.g. numberplate, bike, car, plate)
+  const isPlateOrVehicleQuery = queryTerms.some((term) =>
+    ["numberplate", "plate", "license", "registration", "vehicle", "bike", "car", "scooty"].includes(term)
+  );
 
   for (const term of queryTerms) {
     const variants = TERM_SYNONYMS[term] || [term];
 
-    // 1. Text & Label Matching (supports typos & fuzzy matching)
     const labelScore = Math.max(...variants.map(v => wordMatch(wordsIn(v)[0] || v, labelWords)), 0);
     const textScore = Math.max(...variants.map(v => wordMatch(wordsIn(v)[0] || v, mainWords)), 0);
 
@@ -210,7 +203,6 @@ function scoreEntry(entry, tokens, llmIntent = null) {
       score += textScore >= 2 ? 50 : 35;
     }
 
-    // 2. Tag Matching with Synonyms & Aliases
     const tagsToCheck = new Set([
       `#${term}`,
       `#label_${term}`,
@@ -224,7 +216,6 @@ function scoreEntry(entry, tokens, llmIntent = null) {
       break;
     }
 
-    // 3. Compact substring matching (handles spaced inputs: e.g. "br 01" matching "br01cj6440")
     if (term.length >= 3 && compactText.includes(term)) {
       matchedTerms.add(term);
       score += 45;
@@ -244,7 +235,6 @@ function scoreEntry(entry, tokens, llmIntent = null) {
     }
   }
 
-  // Combined phrase & compacted matching (e.g. "br 01 c" or "happy diwali")
   const compactQuery = queryTerms.join("");
   if (queryTerms.length > 1 && compactQuery.length >= 3) {
     if (compactText.includes(compactQuery)) {
@@ -256,15 +246,6 @@ function scoreEntry(entry, tokens, llmIntent = null) {
     }
   }
 
-  if (isPhotoQuery) {
-    if (entry.type === "image") {
-      score += 25;
-      queryTerms.filter((term) => PHOTO_INTENT_TERMS.has(term)).forEach((term) => matchedTerms.add(term));
-    } else if (!/\b(photo|selfie|picture|portrait|image)\b/i.test(fullText)) {
-      return 0;
-    }
-  }
-
   for (const tag of queryTags) {
     if (effectiveTags.has(tag) && !CATEGORY_TAGS.has(tag)) {
       score += 25;
@@ -272,15 +253,21 @@ function scoreEntry(entry, tokens, llmIntent = null) {
     }
   }
 
+  // KEY BOOST: If the user searches for a plate/vehicle and this is a vehicle image with a plate,
+  // BOOST IT OVER PLAIN TEXT NOTES (+150 points) so it always ranks #1!
+  if (entry.type === "image" && isPlateOrVehicleQuery) {
+    const hasPlate = effectiveTags.has("#vehicle") || /vehicle plate|br01|dl\d|mh\d/i.test(fullText);
+    if (hasPlate) {
+      score += 150;
+      queryTerms.forEach((t) => matchedTerms.add(t));
+    }
+  }
+
   const requiredMatches = Math.max(1, Math.ceil(queryTerms.length * 0.5));
   if (matchedTerms.size < requiredMatches) return 0;
-  if (isPure && !isPhotoQuery && !labelText && score === 0) return 0;
   return score;
 }
 
-/**
- * Ranked Search: Returns results with match scores.
- */
 export async function rankedSearch(rawQuery, llmIntent = null) {
   if (!cacheLoaded || cachedEntries.length === 0) {
     await refreshCache();
@@ -309,9 +296,6 @@ export async function rankedSearch(rawQuery, llmIntent = null) {
     .map((item) => ({ ...item.entry, _score: item.score }));
 }
 
-/**
- * Fast Search for Voice & Live Keystrokes.
- */
 export async function fastSearch(rawQuery, onProgressHit = null) {
   const initialRanked = await rankedSearch(rawQuery);
   if (initialRanked.length === 0) return null;
