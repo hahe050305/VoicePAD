@@ -46,11 +46,12 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths">
             </meta-data>
-
-            <meta-data
-                android:name="com.google.mlkit.vision.DEPENDENCIES"
-                android:value="ocr" />
         </provider>
+
+        <!-- Prompt Google Play Services to automatically pre-download the on-device OCR model -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="ocr" />
     </application>
 
     <!-- Permissions -->

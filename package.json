@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@capacitor-mlkit/text-recognition": "^8.2.1",
     "@capacitor/android": "^8.5.3",
     "@capacitor/camera": "^8.2.6",
     "@capacitor/core": "^8.5.3",
