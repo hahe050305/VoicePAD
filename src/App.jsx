@@ -510,7 +510,7 @@ export default function App() {
               ...headlineWordTags,
               ...activeVisionTags,
               ...idTags,
-              ...(hasVehiclePlate ? ["#vehicle", `#${activePlate.toLowerCase()}`] : []),
+              ...(hasVehiclePlate ? ["#vehicle", `#${activePlate.replace(/\s+/g, "").toLowerCase()}`] : []),
               ...(hasStructuredId ? ["#document"] : []),
               ...(isTextDominant && !hasVehiclePlate && !hasStructuredId ? ["#poster", "#graphic"] : ["#photo"]),
             ];
