@@ -44,8 +44,8 @@ export function recognizeWithTesseract(image, { plate = false, onProgress } = {}
     activeProgress = onProgress;
     try {
       await worker.setParameters({
-        tessedit_char_whitelist: plate ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" : "",
-        tessedit_pageseg_mode: plate ? "7" : "3",
+        tessedit_char_whitelist: plate ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 \n" : "",
+        tessedit_pageseg_mode: plate ? "6" : "3",
       });
       return await worker.recognize(image);
     } finally {

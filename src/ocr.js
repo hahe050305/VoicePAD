@@ -1,27 +1,23 @@
-import { runAggressiveANPR, parsePlateString } from "./services/plateService.js";
+// src/ocr.js
+import { Capacitor } from "@capacitor/core";
+import { Filesystem, Directory } from "@capacitor/filesystem";
+import { TextRecognition } from "@capacitor-mlkit/text-recognition";
+import { parsePlateString } from "./services/plateService.js";
 import { recognizeWithTesseract } from "./services/tesseractService.js";
-import { detectPlateRegion } from "./services/visionService.js";
-import { cropPlate } from "./services/plateService.js";
 
 export function isPureImageText(text) {
   if (!text || !text.trim()) return true;
   const clean = text.trim();
   if (extractVehiclePlate(clean) || extractStructuredIds(clean).length > 0) return false;
 
-  const words = clean.split(/\s+/).filter(w => /^[a-zA-Z]{3,}$/.test(w));
+  const words = clean.split(/\s+/).filter((w) => /^[a-zA-Z]{3,}$/.test(w));
   if (words.length >= 1) return false;
 
-  const validNumbers = clean.split(/\s+/).filter(w => /^[A-Z0-9]{3,}$/i.test(w));
+  const validNumbers = clean.split(/\s+/).filter((w) => /^[A-Z0-9]{3,}$/i.test(w));
   if (validNumbers.length >= 1) return false;
 
   return true;
 }
-
-const VALID_INDIAN_STATES = new Set([
-  "AP", "AR", "AS", "BR", "CG", "CH", "DD", "DL", "DN", "GA", "GJ", "HP", "HR",
-  "JH", "JK", "KA", "KL", "LA", "LD", "MH", "ML", "MN", "MP", "MZ", "NL", "OD",
-  "PB", "PY", "RJ", "SK", "TN", "TR", "TS", "UK", "UP", "WB"
-]);
 
 export function extractVehiclePlate(rawText) {
   return parsePlateString(rawText);
@@ -45,141 +41,113 @@ export function extractStructuredIds(rawText) {
   return found;
 }
 
-async function getOcrInput(file) {
-  if (typeof createImageBitmap !== "function") return file;
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const dataUrl = reader.result;
+      const base64 = typeof dataUrl === "string" ? dataUrl.split(",")[1] : "";
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * 1. Native On-Device OCR (Android / iOS):
+ * Uses Google Play Services ML Kit via @capacitor-mlkit/text-recognition.
+ * Hardware accelerated, zero UI freeze, handles arbitrary angles and 2-line plates.
+ */
+async function recognizeWithNativeMLKit(file) {
+  const tempName = `ocr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`;
   try {
-    const bitmap = await createImageBitmap(file);
-    try {
-      const maxDim = 1200;
-      const longest = Math.max(bitmap.width, bitmap.height);
-      // Do not downscale below 600px on the longest side – Tesseract needs enough pixels.
-      if (longest <= Math.max(600, maxDim)) return file;
+    const base64 = await blobToBase64(file);
+    await Filesystem.writeFile({
+      path: tempName,
+      directory: Directory.Cache,
+      data: base64,
+    });
 
-      const scale = maxDim / longest;
-      const targetWidth = Math.max(1, Math.round(bitmap.width * scale));
-      const targetHeight = Math.max(1, Math.round(bitmap.height * scale));
+    const fileUri = await Filesystem.getUri({
+      path: tempName,
+      directory: Directory.Cache,
+    });
 
-      const canvas = document.createElement("canvas");
-      canvas.width = targetWidth;
-      canvas.height = targetHeight;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return file;
+    const result = await TextRecognition.processImage({
+      path: fileUri.uri,
+    });
 
-      ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
-      canvas.width = 0;
-      canvas.height = 0;
-      return blob || file;
-    } finally {
-      bitmap.close();
-    }
-  } catch {
-    return file;
+    const fullText = result?.text?.trim() || "";
+    return {
+      text: fullText,
+      confidence: fullText ? 95 : 0,
+    };
+  } finally {
+    await Filesystem.deleteFile({
+      path: tempName,
+      directory: Directory.Cache,
+    }).catch(() => {});
   }
 }
 
 /**
- * New high‑accuracy OCR pipeline that first detects the plate region, crops it
- * off‑thread, and then runs Tesseract in plate‑mode. Returns the same shape as
- * the original performOCR for compatibility.
+ * 2. Web / Browser Dev Fallback:
+ * Uses browser native Shape Detection API (window.TextDetector) or single Tesseract pass.
  */
-export async function performPlateOCR(file, onProgress) {
-  // 1️⃣ Try aggressive ANPR first (existing multi‑crop approach). If it finds a
-  // plate with high confidence we can skip the expensive detection step.
-  let detectedPlate = null;
-  try {
-    detectedPlate = await runAggressiveANPR(file);
-  } catch (_) {}
-
-  // 2️⃣ If we already have a solid plate, use it directly.
-  if (detectedPlate && detectedPlate.confidence >= 80) {
-    return {
-      text: `Vehicle Plate: ${detectedPlate.plate}`,
-      rawText: `Vehicle Plate: ${detectedPlate.plate}`,
-      isPureImage: false,
-      confidence: detectedPlate.confidence,
-      plate: detectedPlate.plate,
-      structuredIds: [],
-    };
-  }
-
-  // 3️⃣ Detect plate region via vision model.
-  const region = await detectPlateRegion(file);
-  let plateBlob = null;
-  if (region && region.box) {
-    try {
-      plateBlob = await cropPlate(file, region.box);
-    } catch (e) {
-      console.warn("[ocr] Crop worker failed, falling back to full image", e);
-    }
-  }
-
-  // 4️⃣ If cropping succeeded, run plate‑optimised Tesseract; otherwise fall back
-  // to the original aggressive pipeline.
-  const input = plateBlob ? plateBlob : await getOcrInput(file);
-  const { data } = await recognizeWithTesseract(input, { plate: true, onProgress });
-  const raw = data?.text?.trim() ?? "";
-  const confidence = Math.round(Number(data?.confidence) || 0);
-  const plate = parsePlateString(raw);
-
-  const display = plate ? `Vehicle Plate: ${plate}` : raw;
-
-  const isPure = !plate && extractStructuredIds(display).length === 0 && display.length === 0;
-
-  return {
-    text: display,
-    rawText: display,
-    isPureImage: isPure,
-    confidence: plate ? confidence : confidence,
-    plate,
-    structuredIds: extractStructuredIds(display),
-  };
-}
-
-export async function performOCR(file, onProgress) {
-  // 1. Aggressive Multi‑Window ANPR Pass (Multi‑crop + Contrast enhancement)
-  let detectedPlate = null;
-  try {
-    detectedPlate = await runAggressiveANPR(file);
-  } catch (_) {}
-
-  const input = await getOcrInput(file);
+async function recognizeWithWeb(file, onProgress) {
   let nativeText = "";
-  let tesseractText = "";
-  let tesseractRaw = "";
-  let tesseractConfidence = 0;
-
   if (typeof window !== "undefined" && "TextDetector" in window) {
     let bitmap;
     try {
       const detector = new window.TextDetector();
-      bitmap = await createImageBitmap(input);
+      bitmap = await createImageBitmap(file);
       const detections = await detector.detect(bitmap);
-      nativeText = (detections || []).map((d) => d.rawValue || "").join(" ").trim();
-    } catch (_) {} finally {
+      nativeText = (detections || []).map((d) => d.rawValue || "").join("\n").trim();
+    } catch (_) {
+    } finally {
       bitmap?.close();
     }
   }
 
-  // Always run the general OCR fallback when ANPR found no plate; native text
-  // detection often returns unrelated scene text while missing small plates.
-  if (!nativeText || nativeText.length < 5 || !detectedPlate) {
-    try {
-      const ret = await recognizeWithTesseract(input, { onProgress });
-      tesseractRaw = ret?.data?.text?.trim() || "";
-      const words = ret?.data?.words || [];
-      const readableWords = words
-        .filter((word) => Number(word.confidence) >= 45 && word.text?.trim())
-        .map((word) => word.text.trim());
-      tesseractText = words.length ? readableWords.join(" ") : tesseractRaw;
-      tesseractConfidence = Math.round(Number(ret?.data?.confidence) || 0);
-    } catch (_) {}
+  if (nativeText && nativeText.length >= 4) {
+    return { text: nativeText, confidence: 90 };
   }
 
-  const fullRaw = `${nativeText}\n${tesseractRaw}`;
-  const displayRaw = `${nativeText}\n${tesseractText}`;
-  const plate = detectedPlate?.plate || extractVehiclePlate(fullRaw);
-  const structuredIds = extractStructuredIds(fullRaw);
+  // Tesseract single pass fallback (PSM 6: Uniform block of multi-line text)
+  const ret = await recognizeWithTesseract(file, { plate: false, onProgress }).catch(() => null);
+  const raw = ret?.data?.text?.trim() || "";
+  const conf = Math.round(Number(ret?.data?.confidence) || 0);
+  return { text: raw, confidence: conf };
+}
+
+/**
+ * High-performance, on-device OCR pipeline:
+ * Automatically routes to native Google ML Kit on mobile or browser engine in development.
+ */
+export async function performOCR(file, onProgress) {
+  let recognizedText = "";
+  let confidence = 0;
+
+  try {
+    if (Capacitor.isNativePlatform()) {
+      const mlKitResult = await recognizeWithNativeMLKit(file);
+      recognizedText = mlKitResult.text;
+      confidence = mlKitResult.confidence;
+    } else {
+      const webResult = await recognizeWithWeb(file, onProgress);
+      recognizedText = webResult.text;
+      confidence = webResult.confidence;
+    }
+  } catch (err) {
+    console.warn("[OCR] Primary recognition error, falling back to Web OCR:", err);
+    const webFallback = await recognizeWithWeb(file, onProgress).catch(() => ({ text: "", confidence: 0 }));
+    recognizedText = webFallback.text;
+    confidence = webFallback.confidence;
+  }
+
+  const plate = extractVehiclePlate(recognizedText);
+  const structuredIds = extractStructuredIds(recognizedText);
 
   const WATERMARK_WORDS = new Set([
     "shutterstock", "shutterstockcom", "getty", "gettyimages",
@@ -187,7 +155,7 @@ export async function performOCR(file, onProgress) {
     "vector", "watermark", "photo", "image", "copyright", "com"
   ]);
 
-  const validWords = displayRaw
+  const validWords = recognizedText
     .replace(/[^a-zA-Z\s]/g, " ")
     .split(/\s+/)
     .map((w) => w.trim().toLowerCase())
@@ -208,9 +176,9 @@ export async function performOCR(file, onProgress) {
 
   return {
     text: cleanDisplayText,
-    rawText: cleanDisplayText,
+    rawText: recognizedText,
     isPureImage: isPure,
-    confidence: plate ? (detectedPlate?.confidence ?? tesseractConfidence) : tesseractConfidence,
+    confidence: plate ? Math.max(90, confidence) : confidence,
     plate,
     structuredIds,
   };
