@@ -52,7 +52,8 @@ async function getOcrInput(file) {
     try {
       const maxDim = 1200;
       const longest = Math.max(bitmap.width, bitmap.height);
-      if (longest <= maxDim) return file;
+      // Do not downscale below 600px on the longest side – Tesseract needs enough pixels.
+      if (longest <= Math.max(600, maxDim)) return file;
 
       const scale = maxDim / longest;
       const targetWidth = Math.max(1, Math.round(bitmap.width * scale));

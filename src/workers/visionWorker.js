@@ -49,7 +49,7 @@ async function makeInferenceUrl(imageSource) {
   const blob = await toBlob(imageSource);
   const bitmap = await createImageBitmap(blob);
   try {
-    const maxDim = 640;
+    const maxDim = 320; // Smaller size for faster inference & less UI load.
     const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
     if (scale === 1) return URL.createObjectURL(blob);
     if (typeof OffscreenCanvas !== "function") return URL.createObjectURL(blob);
