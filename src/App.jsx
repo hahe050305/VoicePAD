@@ -469,6 +469,12 @@ export default function App() {
             setSelectedEntry((current) => current?.id === entry.id ? updatePreview(current) : current);
 
             // Run OCR first, then detect objects.
+          // Insert a short pause to keep UI responsive during batch processing.
+          await new Promise(r => setTimeout(r, 0));
+          const ocrResult = await performOCR(file).catch((err) => {
+            console.warn("[Vision] OCR error:", err);
+            return "";
+          });
             const ocrResult = await performOCR(file).catch((err) => {
               console.warn("[Vision] OCR error:", err);
               return "";

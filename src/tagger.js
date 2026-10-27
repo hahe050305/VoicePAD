@@ -112,6 +112,27 @@ function aliasLookup(text) {
 }
 
 export function deriveTags(text) {
+  const BLACKLIST = new Set(["#washroom", "#bathroom", "#toilet"]);
+  if (!text || !text.trim()) return [];
+
+  const lowerText = text.toLowerCase();
+  const allTags = new Set();
+
+  // A. Strict alias map lookup
+  aliasLookup(text).forEach((t) => allTags.add(t));
+
+  // B. Pattern-based semantic rules
+  semanticPatterns.forEach(({ pattern, tags }) => {
+    if (pattern.test(lowerText)) {
+      tags.forEach((t) => allTags.add(t));
+    }
+  });
+
+  // Remove any blacklisted tags
+  BLACKLIST.forEach((b) => allTags.delete(b));
+
+  return Array.from(allTags).sort();
+}
   if (!text || !text.trim()) return [];
 
   const lowerText = text.toLowerCase();

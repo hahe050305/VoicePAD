@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@capacitor-mlkit/text-recognition':
+        specifier: ^8.2.1
+        version: 8.2.1(@capacitor/core@8.5.3)
       '@capacitor/android':
         specifier: ^8.5.3
         version: 8.5.3(@capacitor/core@8.5.3)
@@ -169,6 +172,11 @@ packages:
 
   '@cacheable/utils@2.5.0':
     resolution: {integrity: sha512-buipgOVDkkPXNR5+xBpDw7Zk2n1EvU7qBJCNUcL7rhQ//kfpOXPAvQ511Os0vpLYJ1pZnvudNytkQt2hst3wqA==}
+
+  '@capacitor-mlkit/text-recognition@8.2.1':
+    resolution: {integrity: sha512-FeNR+Og2aLe7UK45SfW6G3VyM3UDoijxkrwkecsuV1dO2TrL99ZpS3V5h34secK0dwmsn8DCrEOShZWkBCpxLg==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
 
   '@capacitor/android@8.5.3':
     resolution: {integrity: sha512-ilH4gSSz3DrketMkzDVAvY9JsWJ//rCQnECLTdcFRO7xXDogwAbUvQAnIAbiqefwV/D1xfjEL4Gw1MJXEcaA9g==}
@@ -2130,6 +2138,10 @@ snapshots:
     dependencies:
       hashery: 1.5.1
       keyv: 5.6.0
+
+  '@capacitor-mlkit/text-recognition@8.2.1(@capacitor/core@8.5.3)':
+    dependencies:
+      '@capacitor/core': 8.5.3
 
   '@capacitor/android@8.5.3(@capacitor/core@8.5.3)':
     dependencies:
