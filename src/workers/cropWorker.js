@@ -42,7 +42,8 @@ self.onmessage = async ({ data }) => {
   );
 
   // 3. Upscale – a larger image gives Tesseract more pixels to work with.
-  const upscale = Math.min(2000 / Math.max(width, height), 3);
+  // Limit upscale to keep final dimensions reasonable for Tesseract (≈1200px).
+  const upscale = Math.min(1200 / Math.max(width, height), 2);
   const finalW = Math.round(width * upscale);
   const finalH = Math.round(height * upscale);
   const finalCanvas = new OffscreenCanvas(finalW, finalH);
