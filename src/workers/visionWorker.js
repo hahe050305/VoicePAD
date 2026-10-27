@@ -119,6 +119,36 @@ async function detect(imageSource, threshold) {
 
 self.onmessage = async ({ data }) => {
   try {
+    let result;
+    if (data.type === "detectPlate") {
+      // Specialized plate detection – return the most confident plate box.
+      const detections = await detect(data.imageSource, data.threshold);
+      // Find detection with label containing "plate".
+      const plates = detections.detections.filter((d) => /plate/i.test(d.label));
+      if (plates.length === 0) throw new Error("No plate detected");
+      const best = plates.reduce((a, b) => (a.score > b.score ? a : b));
+      const { box } = best;
+      // Convert normalized box (0‑1) to absolute pixel values later in the crop worker.
+      result = {
+        box: {
+          xmin: box.xmin,
+          ymin: box.ymin,
+          xmax: box.xmax,
+          ymax: box.ymax,
+          angle: 0, // YOLO tiny does not provide rotation; assume 0.
+        },
+        score: best.score,
+      };
+    } else {
+      result = data.type === "thumbnail"
+        ? await createThumbnail(data.imageSource)
+        : await detect(data.imageSource, data.threshold);
+    }
+    self.postMessage({ id: data.id, result });
+  } catch (error) {
+    self.postMessage({ id: data.id, error: error?.message || "Vision detection failed." });
+  };
+  try {
     const result = data.type === "thumbnail"
       ? await createThumbnail(data.imageSource)
       : await detect(data.imageSource, data.threshold);

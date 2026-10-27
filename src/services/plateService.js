@@ -1,4 +1,30 @@
+// src/services/plateService.js
 import { recognizeWithTesseract } from "./tesseractService.js";
+
+// --- Crop worker handling ---------------------------------------------------
+let cropWorker = null;
+function getCropWorker() {
+  if (cropWorker) return cropWorker;
+  // The worker lives in src/workers/cropWorker.js
+  cropWorker = new Worker(new URL("../workers/cropWorker.js", import.meta.url), { type: "module" });
+  return cropWorker;
+}
+
+/**
+ * Crop a plate region using the dedicated worker. Returns a Blob ready for OCR.
+ */
+export async function cropPlate(imageSource, box) {
+  const bitmap = await createImageBitmap(imageSource);
+  const worker = getCropWorker();
+  return new Promise((resolve, reject) => {
+    worker.onmessage = ({ data }) => {
+      if (data.error) reject(new Error(data.error));
+      else resolve(data.blob);
+    };
+    worker.onerror = reject;
+    worker.postMessage({ bitmap, box }, [bitmap]);
+  });
+}
 
 const VALID_INDIAN_STATES = new Set([
   "AP", "AR", "AS", "BR", "CG", "CH", "DD", "DN", "GA", "GJ", "HP", "HR",
@@ -164,3 +190,13 @@ export async function runAggressiveANPR(imageSource) {
   }
   return best;
 }
+
+// Export the new cropping helper for the OCR pipeline.
+
+
+
+
+
+/** Yield one bounded crop at a time so encoded crops are not retained together. */
+
+

@@ -1,5 +1,7 @@
 import { runAggressiveANPR, parsePlateString } from "./services/plateService.js";
 import { recognizeWithTesseract } from "./services/tesseractService.js";
+import { detectPlateRegion } from "./services/visionService.js";
+import { cropPlate } from "./services/plateService.js";
 
 export function isPureImageText(text) {
   if (!text || !text.trim()) return true;
@@ -75,8 +77,66 @@ async function getOcrInput(file) {
   }
 }
 
+/**
+ * New high‑accuracy OCR pipeline that first detects the plate region, crops it
+ * off‑thread, and then runs Tesseract in plate‑mode. Returns the same shape as
+ * the original performOCR for compatibility.
+ */
+export async function performPlateOCR(file, onProgress) {
+  // 1️⃣ Try aggressive ANPR first (existing multi‑crop approach). If it finds a
+  // plate with high confidence we can skip the expensive detection step.
+  let detectedPlate = null;
+  try {
+    detectedPlate = await runAggressiveANPR(file);
+  } catch (_) {}
+
+  // 2️⃣ If we already have a solid plate, use it directly.
+  if (detectedPlate && detectedPlate.confidence >= 80) {
+    return {
+      text: `Vehicle Plate: ${detectedPlate.plate}`,
+      rawText: `Vehicle Plate: ${detectedPlate.plate}`,
+      isPureImage: false,
+      confidence: detectedPlate.confidence,
+      plate: detectedPlate.plate,
+      structuredIds: [],
+    };
+  }
+
+  // 3️⃣ Detect plate region via vision model.
+  const region = await detectPlateRegion(file);
+  let plateBlob = null;
+  if (region && region.box) {
+    try {
+      plateBlob = await cropPlate(file, region.box);
+    } catch (e) {
+      console.warn("[ocr] Crop worker failed, falling back to full image", e);
+    }
+  }
+
+  // 4️⃣ If cropping succeeded, run plate‑optimised Tesseract; otherwise fall back
+  // to the original aggressive pipeline.
+  const input = plateBlob ? plateBlob : await getOcrInput(file);
+  const { data } = await recognizeWithTesseract(input, { plate: true, onProgress });
+  const raw = data?.text?.trim() ?? "";
+  const confidence = Math.round(Number(data?.confidence) || 0);
+  const plate = parsePlateString(raw);
+
+  const display = plate ? `Vehicle Plate: ${plate}` : raw;
+
+  const isPure = !plate && extractStructuredIds(display).length === 0 && display.length === 0;
+
+  return {
+    text: display,
+    rawText: display,
+    isPureImage: isPure,
+    confidence: plate ? confidence : confidence,
+    plate,
+    structuredIds: extractStructuredIds(display),
+  };
+}
+
 export async function performOCR(file, onProgress) {
-  // 1. Aggressive Multi-Window ANPR Pass (Multi-crop + Contrast enhancement)
+  // 1. Aggressive Multi‑Window ANPR Pass (Multi‑crop + Contrast enhancement)
   let detectedPlate = null;
   try {
     detectedPlate = await runAggressiveANPR(file);
@@ -95,8 +155,7 @@ export async function performOCR(file, onProgress) {
       bitmap = await createImageBitmap(input);
       const detections = await detector.detect(bitmap);
       nativeText = (detections || []).map((d) => d.rawValue || "").join(" ").trim();
-    } catch (_) {
-    } finally {
+    } catch (_) {} finally {
       bitmap?.close();
     }
   }
