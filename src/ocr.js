@@ -205,60 +205,10 @@ async function _performOCR(file, onProgress) {
     structuredIds,
   };
 }
-  let recognizedText = "";
-  let confidence = 0;
 
-  try {
-    if (Capacitor.isNativePlatform()) {
-      const mlKitResult = await recognizeWithNativeMLKit(file);
-      recognizedText = mlKitResult.text;
-      confidence = mlKitResult.confidence;
-    } else {
-      const webResult = await recognizeWithWeb(file, onProgress);
-      recognizedText = webResult.text;
-      confidence = webResult.confidence;
-    }
-  } catch (err) {
-    console.warn("[OCR] Primary recognition error, falling back to Web OCR:", err);
-    const webFallback = await recognizeWithWeb(file, onProgress).catch(() => ({ text: "", confidence: 0 }));
-    recognizedText = webFallback.text;
-    confidence = webFallback.confidence;
-  }
 
-  const plate = extractVehiclePlate(recognizedText);
-  const structuredIds = extractStructuredIds(recognizedText);
 
-  const WATERMARK_WORDS = new Set([
-    "shutterstock", "shutterstockcom", "getty", "gettyimages",
-    "alamy", "stock", "adobe", "adobestock", "depositphotos",
-    "vector", "watermark", "photo", "image", "copyright", "com"
-  ]);
 
-  const validWords = recognizedText
-    .replace(/[^a-zA-Z\s]/g, " ")
-    .split(/\s+/)
-    .map((w) => w.trim().toLowerCase())
-    .filter((w) => w.length >= 3 && /[aeiou]/.test(w) && !WATERMARK_WORDS.has(w));
 
-  const uniqueWords = Array.from(new Set(validWords));
+ 
 
-  let cleanDisplayText = "";
-  if (plate) {
-    cleanDisplayText = `Vehicle Plate: ${plate}`;
-  } else if (structuredIds.length > 0) {
-    cleanDisplayText = structuredIds.map((id) => `${id.type.toUpperCase()}: ${id.value}`).join("\n");
-  } else {
-    cleanDisplayText = uniqueWords.join(" ");
-  }
-
-  const isPure = !plate && structuredIds.length === 0 && cleanDisplayText.length === 0;
-
-  return {
-    text: cleanDisplayText,
-    rawText: recognizedText,
-    isPureImage: isPure,
-    confidence: plate ? Math.max(90, confidence) : confidence,
-    plate,
-    structuredIds,
-  };
-}
