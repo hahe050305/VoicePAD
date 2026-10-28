@@ -18,6 +18,25 @@ const STATE_OCR_ALTERNATIVES = {
 const OCR_TO_DIGIT = { O: "0", Q: "0", D: "0", I: "1", L: "1", Z: "2", S: "5", G: "6", B: "8" };
 const OCR_TO_LETTER = { "0": "O", "1": "I", "2": "Z", "5": "S", "6": "G", "8": "B" };
 
+// In Indian High Security Registration Plates (HSRP), the German DIN 1451-based font has
+// distinctive character geometry that OCR engines frequently misread:
+// - '6' has a rounded top loop that OCR easily mistakes for 'B' or '8'
+// - '4' has an open or angled stroke that OCR frequently misreads as 'L' or 'A'
+// - '0' is misread as 'D', 'O', or 'Q'
+// - '1' is misread as 'I' or 'L'
+const DIGIT_ALTERNATIVES = {
+  B: ["6", "8"],
+  L: ["4", "1"],
+  D: ["0"],
+  O: ["0"],
+  Q: ["0"],
+  I: ["1"],
+  Z: ["2"],
+  S: ["5"],
+  G: ["6"],
+  A: ["4"],
+};
+
 export function formatPlate(value) {
   if (!value) return "";
   const upper = value.toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -60,6 +79,26 @@ function normalizeLetters(value) {
   return [...value].map((character) => OCR_TO_LETTER[character] || character).join("");
 }
 
+function getDigitCandidates(rawChar) {
+  if (/^\d$/.test(rawChar)) return [rawChar];
+  return DIGIT_ALTERNATIVES[rawChar] || [OCR_TO_DIGIT[rawChar] || rawChar];
+}
+
+function expandDigitSequences(rawString) {
+  let results = [""];
+  for (const ch of rawString) {
+    const alts = getDigitCandidates(ch);
+    const next = [];
+    for (const prefix of results) {
+      for (const alt of alts) {
+        next.push(prefix + alt);
+      }
+    }
+    results = next;
+  }
+  return results.filter((s) => /^\d+$/.test(s));
+}
+
 function findStandardPlate(compact) {
   const candidates = new Map();
   for (let start = 0; start <= compact.length - 7; start++) {
@@ -68,25 +107,43 @@ function findStandardPlate(compact) {
 
     for (const districtLength of [2, 1]) {
       const districtStart = start + 2;
-      const district = normalizeDigits(compact.slice(districtStart, districtStart + districtLength));
-      if (district.length !== districtLength || !/^\d{1,2}$/.test(district)) continue;
+      const districtSlice = compact.slice(districtStart, districtStart + districtLength);
+      const districtCandidates = expandDigitSequences(districtSlice);
+      if (districtCandidates.length === 0) continue;
 
       const suffixStart = districtStart + districtLength;
       for (const serialLength of [4, 3]) {
         for (let seriesLength = 3; seriesLength >= 0; seriesLength--) {
-          const series = normalizeLetters(compact.slice(suffixStart, suffixStart + seriesLength));
+          const rawSeries = compact.slice(suffixStart, suffixStart + seriesLength);
+          const series = normalizeLetters(rawSeries);
           const serialStart = suffixStart + seriesLength;
-          const serial = normalizeDigits(compact.slice(serialStart, serialStart + serialLength));
-          if (serial.length !== serialLength || !/^\d{3,4}$/.test(serial)) continue;
-          if (series.length !== seriesLength || !/^[A-Z]{0,3}$/.test(series)) continue;
           if (serialStart + serialLength > compact.length) continue;
+          if (series.length !== seriesLength || !/^[A-Z]{0,3}$/.test(series)) continue;
 
-          const value = `${state}${district}${series}${serial}`;
-          const seriesScore = seriesLength === 2 ? 10 : seriesLength === 1 ? 6 : 2;
-          const districtScore = districtLength === 2 ? 5 : 2;
-          const serialScore = serialLength === 4 ? 4 : 1;
-          const score = seriesScore + districtScore + serialScore;
-          candidates.set(value, Math.max(candidates.get(value) || 0, score));
+          const rawSerial = compact.slice(serialStart, serialStart + serialLength);
+          const serialCandidates = expandDigitSequences(rawSerial);
+          if (serialCandidates.length === 0) continue;
+
+          for (const district of districtCandidates) {
+            for (const serial of serialCandidates) {
+              const value = `${state}${district}${series}${serial}`;
+              let score = 0;
+              // Length bonuses
+              score += seriesLength === 2 ? 10 : seriesLength === 1 ? 6 : 2;
+              score += districtLength === 2 ? 5 : 2;
+              score += serialLength === 4 ? 4 : 1;
+
+              // Penalty if rawSerial characters needed alternative substitutions
+              for (let i = 0; i < rawSerial.length; i++) {
+                if (rawSerial[i] === serial[i]) score += 3;
+                else if (rawSerial[i] === 'L' && serial[i] === '4') score += 2.5; // HSRP L->4 is very high fidelity
+                else if (rawSerial[i] === 'B' && serial[i] === '6') score += 2.5; // HSRP B->6 is very high fidelity
+                else score += 1;
+              }
+
+              candidates.set(value, Math.max(candidates.get(value) || 0, score));
+            }
+          }
         }
       }
     }
