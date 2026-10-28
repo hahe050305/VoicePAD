@@ -1,4 +1,4 @@
-// src/App.jsx
+﻿// src/App.jsx
 import { useEffect, useState, useRef, useCallback } from "react";
 import { db, seedDemoData } from "./db.js";
 import { rankedSearch, fastSearch, refreshCache, getImageThumbnailUrl } from "./search.js";
@@ -26,7 +26,7 @@ export default function App() {
   const [editLabel, setEditLabel] = useState("");
   const [editingError, setEditingError] = useState("");
 
-  // Zoom modal state — entry selected by clicking a card
+  // Zoom modal state â€” entry selected by clicking a card
   const [selectedEntry, setSelectedEntry] = useState(null);
   const [ocrExpandedId, setOcrExpandedId] = useState(null);
 
@@ -151,7 +151,7 @@ export default function App() {
     enqueueThumbnailBackfill(filteredEntries);
   }, [filteredEntries, enqueueThumbnailBackfill]);
 
-  // ── Voice recognition ────────────────────────────────────────────────────────
+  // â”€â”€ Voice recognition â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -255,7 +255,7 @@ export default function App() {
     setFilteredEntries(allEntries.slice(0, 20));
   };
 
-  // ── Live feed filtering for manual text search (debounced) ───────────────────
+  // â”€â”€ Live feed filtering for manual text search (debounced) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const handleLiveFilter = useCallback(
     (q) => {
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
@@ -299,7 +299,7 @@ export default function App() {
     }
   };
 
-  // ── Quick note with semantic auto-tagging ────────────────────────────────────
+  // â”€â”€ Quick note with semantic auto-tagging â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const handleNoteChange = (e) => {
     const val = e.target.value;
     setManualNote(val);
@@ -333,7 +333,7 @@ export default function App() {
     }
   };
 
-  // ── In-card editing ──────────────────────────────────────────────────────────
+  // â”€â”€ In-card editing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const startEditing = (entry, e) => {
     if (e) e.stopPropagation();
     setEditingId(entry.id);
@@ -401,7 +401,7 @@ export default function App() {
     setEditLabel("");
   };
 
-  // ── Image Capture / OCR ──────────────────────────────────────────────────────
+  // â”€â”€ Image Capture / OCR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const extractTagsFromText = (text) => {
     if (!text || !text.trim()) return ["#image", "#photo"];
     const tags = deriveTags(text);
@@ -425,65 +425,47 @@ export default function App() {
         imageBlob: file,
         label: "",
         ocr: "",
-        isPureImage: true, // Default to true so it renders instantly as a photo placeholder
+        isPureImage: true, // Default so it renders instantly as a photo placeholder
         tags: ["#image", "#photo"],
         timestamp: Date.now() + i,
       }));
       newEntries.forEach((entry) => thumbnailJobsRef.current.add(entry.id));
 
-      // 3. Immediately store to database and update UI
+      // Immediately store to database and update UI
       await db.images.bulkAdd(newEntries);
       const updated = await refreshCache();
       const sorted = [...updated].sort((a, b) => b.timestamp - a.timestamp);
       setAllEntries(sorted);
       setFilteredEntries(sorted.slice(0, 20));
 
-      // 4. Trigger top-right reminder popup on every unlabelled image after a few seconds
+      // Trigger top-right reminder popup on every unlabelled image after a few seconds
       if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);
       reminderTimerRef.current = setTimeout(() => {
         setShowLabelReminder(true);
       }, 2500);
 
-      // 4. Run OCR pipeline SILENTLY in the background without blocking or showing progress
+      // Run OCR pipeline silently in the background without blocking the UI
       const processingTask = imageProcessingQueueRef.current.then(async () => {
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
           const entry = newEntries[i];
           try {
             console.log(`[Vision] Processing image ${i + 1}/${files.length}...`);
-            const thumbnail = await createImageThumbnail(file).catch((err) => {
+            await createImageThumbnail(file).catch(err => {
               console.warn("[Vision] Thumbnail creation failed:", err);
               return null;
             });
-            let previewUrl = null;
-            if (thumbnail) {
-              await db.images.update(entry.id, { thumbnailBlob: thumbnail });
-              previewUrl = getImageThumbnailUrl(entry.id, thumbnail);
-            } else {
-              await db.images.update(entry.id, { thumbnailFailed: true });
-            }
-            const updatePreview = (image) => image.id === entry.id
-              ? { ...image, thumbnailBlob: thumbnail, thumbnailUrl: previewUrl, thumbnailFailed: !thumbnail }
-              : image;
-            setFilteredEntries((current) => current.map(updatePreview));
-            setSelectedEntry((current) => current?.id === entry.id ? updatePreview(current) : current);
 
-            // Run OCR first, then detect objects.
-          // Insert a short pause to keep UI responsive during batch processing.
-          await new Promise(r => setTimeout(r, 0));
-          const ocrResult = await performOCR(file).catch((err) => {
-            console.warn("[Vision] OCR error:", err);
-            return "";
-          });
-            const ocrResult = await performOCR(file).catch((err) => {
-              console.warn("[Vision] OCR error:", err);
-              return "";
-            });
+            // Yield to UI thread before heavy OCR work
+            await new Promise(r => setTimeout(r, 0));
 
-            const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
-            const activePlate = typeof ocrResult === "object" && ocrResult?.plate ? ocrResult.plate : null;
-            const structuredIds = typeof ocrResult === "object" && Array.isArray(ocrResult?.structuredIds) ? ocrResult.structuredIds : [];
-            const cleanText = extractedText.trim();
+            // Perform OCR – always returns { text, plate, structuredIds }
+            const ocrResult = await performOCR(file);
+            const extractedText = ocrResult?.text?.trim() ?? "";
+            const activePlate = ocrResult?.plate ?? null;
+            const structuredIds = ocrResult?.structuredIds ?? [];
+
+            const cleanText = extractedText;
             const validWords = cleanText
               .replace(/[^a-zA-Z\s]/g, " ")
               .split(/\s+/)
@@ -537,7 +519,8 @@ export default function App() {
             thumbnailJobsRef.current.delete(entry.id);
           }
         }
-        // Re-sync UI state so the new tags immediately appear on the cards!
+
+        // Re-sync UI so new tags appear on the cards immediately
         const refreshed = await refreshCache();
         const refreshedSorted = [...refreshed].sort((a, b) => b.timestamp - a.timestamp);
         setAllEntries(refreshedSorted);
@@ -553,12 +536,10 @@ export default function App() {
         newEntries.forEach((entry) => thumbnailJobsRef.current.delete(entry.id));
       });
     } catch (err) {
-      console.error("Real‑timeimage upload failed:", err);
+      console.error("Real-time image upload failed:", err);
       alert("Error adding images. Please try again.");
     }
   };
-
-  // ── Delete ───────────────────────────────────────────────────────────────────
   const handleDeleteEntry = async (entry, e) => {
     if (e) e.stopPropagation();
     // if (!window.confirm("Delete this memory?")) return;
@@ -580,14 +561,14 @@ export default function App() {
   const formatTime = (ts) =>
     new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-  // ── Render ───────────────────────────────────────────────────────────────────
+  // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center px-4 py-8 antialiased selection:bg-indigo-500 selection:text-white">
       {/* Top-Right Notification: Appears on every unlabelled image upload after a few seconds */}
       {showLabelReminder && (
         <div className="fixed top-5 right-5 z-50 max-w-sm animate-in fade-in slide-in-from-top-4 duration-300">
           <div className="bg-slate-900/95 border border-amber-500/50 shadow-2xl rounded-2xl p-3.5 backdrop-blur-md flex items-start gap-3 text-slate-100">
-            <span className="text-xl shrink-0 mt-0.5">🏷️</span>
+            <span className="text-xl shrink-0 mt-0.5">ðŸ·ï¸</span>
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-amber-300">
                 Unlabeled image uploaded
@@ -621,7 +602,7 @@ export default function App() {
               className="text-slate-500 hover:text-slate-300 text-xs p-1"
               aria-label="Close reminder"
             >
-              ✕
+              âœ•
             </button>
           </div>
         </div>
@@ -635,23 +616,23 @@ export default function App() {
             VoicePAD
           </h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            Real‑time
+            Real Time
           </p>
         </div>
                 <div className="flex items-center gap-2">
           {llmStatus.state === "loading" && !llmStatus.isCached && (
             <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-indigo-950/80 border border-indigo-700/50 text-indigo-300 animate-pulse">
-              🧠 Downloading AI ({llmStatus.progress}%)
+              ðŸ§  Downloading AI ({llmStatus.progress}%)
             </span>
           )}
           {llmStatus.state === "cached_loading" && (
             <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-indigo-950/50 border border-indigo-800/40 text-indigo-300/80">
-              ⚡ Initializing...
+              âš¡ Initializing...
             </span>
           )}
           {llmStatus.state === "ready" && (
             <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-700/50 text-emerald-300">
-              ⚡ Local AI Ready
+              âš¡ Local AI Ready
             </span>
           )}
           <span className="text-[11px] font-mono tracking-wider uppercase px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-slate-400">
@@ -667,7 +648,7 @@ export default function App() {
           {(voiceTranscript || isListening) && (
             <div className="absolute -top-10 -right-8 z-20 flex flex-col items-start max-w-[210px] animate-in fade-in zoom-in-95 duration-200">
               <div className="relative px-3 py-1.5 bg-indigo-600 text-white rounded-2xl rounded-bl-sm shadow-xl border border-indigo-400/40 flex items-center gap-1.5 backdrop-blur-md">
-                <span className="text-xs">💭</span>
+                <span className="text-xs">ðŸ’­</span>
                 <span className="text-xs font-medium tracking-tight truncate max-w-[150px]">
                   {voiceTranscript ? `"${voiceTranscript}"` : "Listening..."}
                 </span>
@@ -678,7 +659,7 @@ export default function App() {
                     title="Clear voice query"
                     aria-label="Clear voice query"
                   >
-                    ✕
+                    âœ•
                   </button>
                 )}
               </div>
@@ -699,14 +680,14 @@ export default function App() {
             }`}
             aria-label="Activate voice search"
           >
-            <span className="text-3xl mb-1 select-none">{isListening ? "🛑" : "🎙️"}</span>
+            <span className="text-3xl mb-1 select-none">{isListening ? "ðŸ›‘" : "ðŸŽ™ï¸"}</span>
             <span className="text-[10px] font-semibold tracking-wider uppercase text-white/90 select-none">
               {isListening ? "Listening" : "Tap to Ask"}
             </span>
           </button>
         </div>
 
-        {/* Image Capture — gallery supports selecting multiple images */}
+        {/* Image Capture â€” gallery supports selecting multiple images */}
         <div className="w-full flex items-center justify-center gap-3 my-2">
           <input
     ref={fileInputRef}
@@ -729,7 +710,7 @@ export default function App() {
     onClick={() => cameraInputRef.current?.click()}
     className="flex-1 max-w-[170px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold border transition shadow-sm bg-indigo-600 hover:bg-indigo-500 border-indigo-500/40 text-white active:scale-95"
   >
-    <span className="text-base">📸</span>
+    <span className="text-base">ðŸ“¸</span>
     <span>Live Capture</span>
   </button>
   {/* 2. Gallery / File Upload */}
@@ -738,20 +719,20 @@ export default function App() {
     onClick={() => fileInputRef.current?.click()}
     className="flex-1 max-w-[170px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-medium border transition shadow-sm bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-slate-700 text-slate-200 active:scale-95"
   >
-    <span className="text-base">📁</span>
+    <span className="text-base">ðŸ“</span>
     <span>Upload Photos</span>
   </button>
         </div>
 
-        {/* Search Bar — manual text filter */}
+        {/* Search Bar â€” manual text filter */}
         <form onSubmit={handleSearchSubmit} className="w-full mt-4">
           <div className="relative flex items-center">
             <span className="absolute left-3 text-slate-500 text-sm pointer-events-none">
-              🔍
+              ðŸ”
             </span>
             <input
               type="text"
-              placeholder="Search memories… filters feed as you type"
+              placeholder="Search memoriesâ€¦ filters feed as you type"
               value={query}
               onChange={handleQueryChange}
               className="w-full pl-9 pr-24 py-3 bg-slate-900/90 border border-slate-800 rounded-xl text-sm placeholder-slate-500 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition shadow-inner"
@@ -766,7 +747,7 @@ export default function App() {
                 }}
                 className="absolute right-20 text-slate-500 hover:text-slate-300 text-xs"
               >
-                ✕
+                âœ•
               </button>
             )}
             
@@ -788,7 +769,7 @@ export default function App() {
           <div className="flex gap-2">
             <input
               type="text"
-              placeholder="Jot a note — tags auto-detected from what you type…"
+              placeholder="Jot a note â€” tags auto-detected from what you typeâ€¦"
               value={manualNote}
               onChange={handleNoteChange}
               className="flex-1 px-3 py-2 bg-slate-900/50 border border-slate-800/80 rounded-lg text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-slate-700"
@@ -816,7 +797,7 @@ export default function App() {
           )}
         </form>
 
-        {/* Feed — with in-card editing */}
+        {/* Feed â€” with in-card editing */}
         <section className="w-full mt-8">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
@@ -909,16 +890,16 @@ export default function App() {
                               title={`${ocrExpandedId === entry.id ? "Hide" : "Show"} extracted text`}
                               className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
                             >
-                              📷 OCR {ocrExpandedId === entry.id ? "⌃" : "⌄"}
+                              ðŸ“· OCR {ocrExpandedId === entry.id ? "âŒƒ" : "âŒ„"}
                             </button>
                           ) : (
                             <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
-                              {entry.type === "image" ? "🖼️ Image" : "📝 Note"}
+                              {entry.type === "image" ? "ðŸ–¼ï¸ Image" : "ðŸ“ Note"}
                             </span>
                           )}
                           {entry.label ? (
                             <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/40 text-indigo-300 flex items-center gap-1">
-                              🏷️ {entry.label}
+                              ðŸ·ï¸ {entry.label}
                             </span>
                           ) : entry.type === "image" ? (
                             <button
@@ -926,7 +907,7 @@ export default function App() {
                               className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-600/40 text-amber-300 hover:bg-amber-900/90 transition flex items-center gap-1"
                               title="Click to add a label for instant search"
                             >
-                              🏷️ + Label
+                              ðŸ·ï¸ + Label
                             </button>
                           ) : null}
                         </div>
@@ -994,7 +975,7 @@ export default function App() {
                             </div>
                             {editingError && (
                               <p className="text-[11px] text-rose-400 mt-1 font-medium animate-in fade-in">
-                                ⚠️ {editingError}
+                                âš ï¸ {editingError}
                               </p>
                             )}
                           </div>
@@ -1012,7 +993,7 @@ export default function App() {
                                 />
                               ) : (
                                 <span className="px-4 text-center text-xs text-slate-500">
-                                  {entry.thumbnailFailed ? "Preview unavailable · tap to open" : "Preparing preview…"}
+                                  {entry.thumbnailFailed ? "Preview unavailable Â· tap to open" : "Preparing previewâ€¦"}
                                 </span>
                               )}
                             </div>
@@ -1076,7 +1057,7 @@ export default function App() {
                               title="Edit memory"
                               aria-label="Edit memory"
                             >
-                              ✏️
+                              âœï¸
                             </button>
                             <button
                               onClick={(e) => handleDeleteEntry(entry, e)}
@@ -1084,7 +1065,7 @@ export default function App() {
                               title="Delete memory"
                               aria-label="Delete memory"
                             >
-                              🗑️
+                              ðŸ—‘ï¸
                             </button>
                           </div>
                         </div>
@@ -1098,7 +1079,7 @@ export default function App() {
         </section>
       </main>
 
-      {/* ── Centered zoomed memory card ───────────────────────────────────── */}
+      {/* â”€â”€ Centered zoomed memory card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {selectedEntry && (() => {
         const modalEntry = selectedEntry;
         const modalPure =
@@ -1131,23 +1112,23 @@ export default function App() {
                       aria-label={`${ocrExpandedId === modalEntry.id ? "Hide" : "Show"} extracted OCR text`}
                       className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
                     >
-                      📷 OCR {ocrExpandedId === modalEntry.id ? "⌃" : "⌄"}
+                      ðŸ“· OCR {ocrExpandedId === modalEntry.id ? "âŒƒ" : "âŒ„"}
                     </button>
                   ) : (
                     <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
-                      {modalEntry.type === "image" ? "🖼️ Image" : "📝 Note"}
+                      {modalEntry.type === "image" ? "ðŸ–¼ï¸ Image" : "ðŸ“ Note"}
                     </span>
                   )}
                   {modalEntry.label ? (
                     <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/40 text-indigo-300 flex items-center gap-1">
-                      🏷️ {modalEntry.label}
+                      ðŸ·ï¸ {modalEntry.label}
                     </span>
                   ) : modalEntry.type === "image" ? (
                     <button
                       onClick={() => { startEditing(modalEntry); setSelectedEntry(null); }}
                       className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-600/40 text-amber-300 hover:bg-amber-900/90 transition flex items-center gap-1"
                     >
-                      🏷️ + Label
+                      ðŸ·ï¸ + Label
                     </button>
                   ) : null}
                 </div>
@@ -1162,7 +1143,7 @@ export default function App() {
                       title="Edit memory"
                       aria-label="Edit memory"
                     >
-                      ✏️
+                      âœï¸
                     </button>
                     <button
                       onClick={(event) => { handleDeleteEntry(modalEntry, event); setSelectedEntry(null); }}
@@ -1170,7 +1151,7 @@ export default function App() {
                       title="Delete memory"
                       aria-label="Delete memory"
                     >
-                      🗑️
+                      ðŸ—‘ï¸
                     </button>
                   </div>
                 </div>

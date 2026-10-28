@@ -8,23 +8,23 @@ import aliasMap from "./aliasMap.json";
 // 1. PATTERN-BASED SEMANTIC RULES
 // ─────────────────────────────────────────────────────────────────────────────
 const semanticPatterns = [
-  // ── Vehicles & Transport ─────────────────────────────────────────────────
+  // ── Vehicles & Transport ────────────────────────────────────────────────
   { pattern: /\b(my\s+)?(bike|scooty|car|vehicle|scooter|cycle|ev|moped|auto|cab|truck|van|twowheeler|fourwheeler)\b/, tags: ["#vehicle"] },
   { pattern: /\b(parked|parking|park)\s+(my|the)?\s*\w+/, tags: ["#parking"] },
   { pattern: /\b(fuel|petrol|diesel|filled|pump)\b/, tags: ["#fuel"] },
   { pattern: /\b(number\s*plate|license\s*plate|registration|rc\s*book|plate)\b/, tags: ["#vehicle", "#document"] },
   { pattern: /\b(drove|riding|drive|ride)\b/, tags: ["#vehicle"] },
-  // Match standard vehicle registration formats (e.g. BR01, DL04, MH12, etc.)
+  // Standard vehicle registration formats (e.g. BR01, DL04, MH12, etc.)
   { pattern: /\b[A-Z]{2}\s*\d{1,2}\s*[A-Z]{0,3}\s*\d{3,4}\b/i, tags: ["#vehicle"] },
-  // Match Bharat (BH) series format: e.g. 22 BH 6517 A
+  // Bharat (BH) series format: e.g. 22 BH 6517 A
   { pattern: /\b\d{2}\s*BH\s*\d{2,4}\s*[A-Z]{1,2}\b/i, tags: ["#vehicle"] },
 
-  // ── Festivals & Events ───────────────────────────────────────────────────
+  // ── Festivals & Events ──────────────────────────────────────────────────
   { pattern: /\b(diwali|deepavali|festival|festive|crackers|diya|lights)\b/, tags: ["#festival", "#celebration"] },
   { pattern: /\b(birthday|bday|anniversary|party)\b/, tags: ["#celebration", "#reminder"] },
   { pattern: /\b(christmas|xmas|new\s*year|eid|holi)\b/, tags: ["#festival", "#celebration"] },
 
-  // ── Photos & Selfies ──────────────────────────────────────────────────────
+  // ── Photos & Selfies ─────────────────────────────────────────────────────
   { pattern: /\b(selfie|photo|picture|pic|pics|portrait|snap|my\s+face|photo\s+of\s+me|my\s+selfie|my\s+photo|camera\s+roll)\b/, tags: ["#photo", "#selfie"] },
 
   // ── Security / Credentials ────────────────────────────────────────────────
@@ -35,7 +35,7 @@ const semanticPatterns = [
   { pattern: /\b(secret|credentials|login|username)\b/, tags: ["#security"] },
   { pattern: /\b(door|room|gate|cabinet|cupboard)\s*(code|key|number|pin|password)\b/, tags: ["#security"] },
 
-  // ── Finance ───────────────────────────────────────────────────────────────
+  // ── Finance ────────────────────────────────────────────────────────────────
   { pattern: /\b(account\s*number|acc\s*no|bank\s*acc)\b/, tags: ["#finance"] },
   { pattern: /\b(ifsc|swift|iban|micr)\b/, tags: ["#finance"] },
   { pattern: /\b(gpay|google\s*pay|phonepe|paytm|upi\s*id|upi)\b/, tags: ["#finance"] },
@@ -55,7 +55,7 @@ const semanticPatterns = [
   { pattern: /\b(due\s*date|last\s*date|pay\s*before|deadline)\b/, tags: ["#bill", "#reminder"] },
   { pattern: /\b(pending\s*bill|unpaid|due)\b/, tags: ["#bill"] },
 
-  // ── Documents & IDs ───────────────────────────────────────────────────────
+  // ── Documents & IDs ─────────────────────────────────────────────────────
   { pattern: /\b(aadhaar|aadhar)\b/, tags: ["#document"] },
   { pattern: /\b(pan\s*card|pan\s*number)\b/, tags: ["#document"] },
   { pattern: /\b(passport|visa|stamp)\b/, tags: ["#document"] },
@@ -64,7 +64,7 @@ const semanticPatterns = [
   { pattern: /\b(birth\s*certificate|degree|marksheet|result|transcript)\b/, tags: ["#document"] },
   { pattern: /\b(kyc|verification|proof\s*of)\b/, tags: ["#document"] },
 
-  // ── Health & Medicine ─────────────────────────────────────────────────────
+  // ── Health & Medicine ───────────────────────────────────────────────────
   { pattern: /\b(medicine|tablet|capsule|syrup|injection|dose|dosage)\b/, tags: ["#health"] },
   { pattern: /\b(doctor|physician|specialist|hospital|clinic|pharmacy)\b/, tags: ["#health"] },
   { pattern: /\b(prescription|rx)\b/, tags: ["#health"] },
@@ -79,13 +79,13 @@ const semanticPatterns = [
   { pattern: /\b(hotel|hostel|resort|check-?in|check-?out|booking\s*id)\b/, tags: ["#travel"] },
   { pattern: /\b(trip|vacation|holiday|tour|itinerary)\b/, tags: ["#travel"] },
 
-  // ── Reminders & Tasks ────────────────────────────────────────────────────
+  // ── Reminders & Tasks ───────────────────────────────────────────────────
   { pattern: /\b(remind|reminder|remember|don't\s*forget|memo)\b/, tags: ["#reminder"] },
   { pattern: /\b(todo|to-do|to\s*do|task|errand|follow(\s*|-)?up)\b/, tags: ["#reminder"] },
   { pattern: /\b(meeting|call\s*at|appointment\s*at|event)\b/, tags: ["#reminder"] },
   { pattern: /\b(tomorrow|tonight|next\s*week)\b/, tags: ["#reminder"] },
 
-  // ── Shopping ─────────────────────────────────────────────────────────────
+  // ── Shopping ──────────────────────────────────────────────────────────────
   { pattern: /\b(buy|purchase|order|pick\s*up|shop|shopping)\b/, tags: ["#shopping"] },
   { pattern: /\b(grocery|vegetables|fruits|milk|eggs|bread)\b/, tags: ["#shopping"] },
   { pattern: /\b(amazon|flipkart|swiggy|blinkit|zepto)\b/, tags: ["#shopping"] },
@@ -121,7 +121,7 @@ export function deriveTags(text) {
   // A. Strict alias map lookup
   aliasLookup(text).forEach((t) => allTags.add(t));
 
-  // B. Pattern-based semantic rules
+  // B. Pattern‑based semantic rules
   semanticPatterns.forEach(({ pattern, tags }) => {
     if (pattern.test(lowerText)) {
       tags.forEach((t) => allTags.add(t));
@@ -131,22 +131,6 @@ export function deriveTags(text) {
   // Remove any blacklisted tags
   BLACKLIST.forEach((b) => allTags.delete(b));
 
-  return Array.from(allTags).sort();
-}
-  if (!text || !text.trim()) return [];
-
-  const lowerText = text.toLowerCase();
-  const allTags = new Set();
-
-  // A. Strict alias map lookup
-  aliasLookup(text).forEach((t) => allTags.add(t));
-
-  // B. Pattern-based semantic rules
-  semanticPatterns.forEach(({ pattern, tags }) => {
-    if (pattern.test(lowerText)) {
-      tags.forEach((t) => allTags.add(t));
-    }
-  });
-
+  // Return sorted array of unique tags
   return Array.from(allTags).sort();
 }
