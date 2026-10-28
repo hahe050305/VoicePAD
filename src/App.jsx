@@ -1,4 +1,4 @@
-// src/App.jsx
+﻿// src/App.jsx
 import { useEffect, useState, useRef, useCallback } from "react";
 import { db, seedDemoData } from "./db.js";
 import { rankedSearch, fastSearch, refreshCache, getImageThumbnailUrl, getImageSource } from "./search.js";
@@ -24,7 +24,7 @@ export default function App() {
   const [editLabel, setEditLabel] = useState("");
   const [editingError, setEditingError] = useState("");
 
-  // Zoom modal state - entry selected by clicking a card
+  // Zoom modal state â€” entry selected by clicking a card
   const [selectedEntry, setSelectedEntry] = useState(null);
   const [selectedImage, setSelectedImage] = useState(null);
   const [ocrExpandedId, setOcrExpandedId] = useState(null);
@@ -168,7 +168,7 @@ export default function App() {
     enqueueThumbnailBackfill(filteredEntries);
   }, [filteredEntries, enqueueThumbnailBackfill]);
 
-  // ── Voice recognition ────────────────────────────────────────────────────────
+  // â”€â”€ Voice recognition â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -272,7 +272,7 @@ export default function App() {
     setFilteredEntries(allEntries.slice(0, 20));
   };
 
-  // ── Live feed filtering for manual text search (debounced) ───────────────────
+  // â”€â”€ Live feed filtering for manual text search (debounced) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const handleLiveFilter = useCallback(
     (q) => {
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
@@ -316,7 +316,7 @@ export default function App() {
     }
   };
 
-  // ── Quick note with semantic auto-tagging ────────────────────────────────────
+  // â”€â”€ Quick note with semantic auto-tagging â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const handleNoteChange = (e) => {
     const val = e.target.value;
     setManualNote(val);
@@ -350,7 +350,7 @@ export default function App() {
     }
   };
 
-  // ── In-card editing ──────────────────────────────────────────────────────────
+  // â”€â”€ In-card editing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const startEditing = (entry, e) => {
     if (e) e.stopPropagation();
     setEditingId(entry.id);
@@ -418,7 +418,7 @@ export default function App() {
     setEditLabel("");
   };
 
-  // ── Image Capture / OCR ──────────────────────────────────────────────────────
+  // â”€â”€ Image Capture / OCR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const extractTagsFromText = (text) => {
     if (!text || !text.trim()) return ["#image", "#photo"];
     const tags = deriveTags(text);
@@ -442,13 +442,13 @@ export default function App() {
         imageBlob: file,
         label: "",
         ocr: "",
-        isPureImage: true, // Default to true so it renders instantly as a photo placeholder
+        isPureImage: true, // Default so it renders instantly as a photo placeholder
         tags: ["#image", "#photo"],
         timestamp: Date.now() + i,
       }));
       newEntries.forEach((entry) => thumbnailJobsRef.current.add(entry.id));
 
-      // 3. Immediately store to database and update UI
+      // Immediately store to database and update UI
       await db.images.bulkAdd(newEntries);
       files.length = 0;
       newEntries.forEach((entry) => {
@@ -459,13 +459,13 @@ export default function App() {
       setAllEntries(sorted);
       setFilteredEntries(sorted.slice(0, 20));
 
-      // 4. Trigger top-right reminder popup on every unlabelled image after a few seconds
+      // Trigger top-right reminder popup on every unlabelled image after a few seconds
       if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);
       reminderTimerRef.current = setTimeout(() => {
         setShowLabelReminder(true);
       }, 2500);
 
-      // 4. Run OCR pipeline SILENTLY in the background without blocking or showing progress
+      // Run OCR pipeline silently in the background without blocking the UI
       const processingTask = imageProcessingQueueRef.current.then(async () => {
         for (let i = 0; i < newEntries.length; i++) {
           const entry = newEntries[i];
@@ -569,7 +569,8 @@ export default function App() {
             thumbnailJobsRef.current.delete(entry.id);
           }
         }
-        // Re-sync UI state so the new tags immediately appear on the cards!
+
+        // Re-sync UI so new tags appear on the cards immediately
         const refreshed = await refreshCache();
         const refreshedSorted = [...refreshed].sort((a, b) => b.timestamp - a.timestamp);
         setAllEntries(refreshedSorted);
@@ -589,8 +590,6 @@ export default function App() {
       alert("Error adding images. Please try again.");
     }
   };
-
-  // ── Delete ───────────────────────────────────────────────────────────────────
   const handleDeleteEntry = async (entry, e) => {
     if (e) e.stopPropagation();
     // if (!window.confirm("Delete this memory?")) return;
@@ -612,7 +611,7 @@ export default function App() {
   const formatTime = (ts) =>
     new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-  // ── Render ───────────────────────────────────────────────────────────────────
+  // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center px-4 py-8 antialiased selection:bg-indigo-500 selection:text-white">
       {/* Top-Right Notification: Appears on every unlabelled image upload after a few seconds */}

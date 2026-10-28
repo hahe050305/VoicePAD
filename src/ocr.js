@@ -249,7 +249,7 @@ async function _performOCR(file, onProgress) {
     ? `Vehicle Plate: ${plate}\n${cleanDisplayText}`.trim()
     : cleanDisplayText;
 
-  const isPure = !plate && structuredIds.length === 0 && cleanDisplayText.length === 0;
+ 
 
   return {
     text: displayText,
