@@ -4,7 +4,11 @@ import { db, seedDemoData } from "./db.js";
 import { rankedSearch, fastSearch, refreshCache, getImageThumbnailUrl, getImageSource } from "./search.js";
 import { performOCR, recognizeVehiclePlate, isPureImageText } from "./ocr.js";
 import { deriveTags } from "./tagger.js";
-import { createImageThumbnail, getDetectedLabelsAndTags } from "./services/visionService.js";
+import {
+  createImageThumbnail,
+  getDetectedLabelsAndTags,
+  subscribeVisionModelStatus,
+} from "./services/visionService.js";
 import { createId } from "./id.js";
 
 export default function App() {
@@ -15,6 +19,11 @@ export default function App() {
   const [allEntries, setAllEntries] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [visionModelStatus, setVisionModelStatus] = useState({
+    state: "idle",
+    progress: null,
+    error: null,
+  });
   const [manualNote, setManualNote] = useState("");
   const [autoTags, setAutoTags] = useState([]);
 
@@ -159,7 +168,9 @@ export default function App() {
     void Promise.resolve()
       .then(loadEntries)
       .catch((err) => console.error("Failed to load memories:", err));
+    const unsubscribeVisionStatus = subscribeVisionModelStatus(setVisionModelStatus);
     return () => {
+      unsubscribeVisionStatus();
       if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);
     };
   }, [loadEntries]);
