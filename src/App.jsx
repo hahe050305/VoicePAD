@@ -1,10 +1,9 @@
 // src/App.jsx
 import { useEffect, useState, useRef, useCallback } from "react";
 import { db, seedDemoData } from "./db.js";
-import { rankedSearch, fastSearch, refreshCache, getImageThumbnailUrl } from "./search.js";
-import { performOCR, isPureImageText } from "./ocr.js";
+import { rankedSearch, fastSearch, refreshCache, getImageThumbnailUrl, getImageSource } from "./search.js";
+import { performOCR, recognizeVehiclePlate, isPureImageText } from "./ocr.js";
 import { deriveTags } from "./tagger.js";
-import { initLLM, subscribeLLMStatus } from "./llmService.js";
 import { createImageThumbnail, getDetectedLabelsAndTags } from "./services/visionService.js";
 import { createId } from "./id.js";
 
@@ -18,7 +17,6 @@ export default function App() {
   const [isListening, setIsListening] = useState(false);
   const [manualNote, setManualNote] = useState("");
   const [autoTags, setAutoTags] = useState([]);
-  const [llmStatus, setLlmStatus] = useState({ state: "idle", progress: 0 });
 
   // In-card editing state
   const [editingId, setEditingId] = useState(null);
@@ -26,8 +24,9 @@ export default function App() {
   const [editLabel, setEditLabel] = useState("");
   const [editingError, setEditingError] = useState("");
 
-  // Zoom modal state — entry selected by clicking a card
+  // Zoom modal state - entry selected by clicking a card
   const [selectedEntry, setSelectedEntry] = useState(null);
+  const [selectedImage, setSelectedImage] = useState(null);
   const [ocrExpandedId, setOcrExpandedId] = useState(null);
 
   // Keep the feed at the same viewport position while a card is zoomed.
@@ -63,6 +62,30 @@ export default function App() {
     };
   }, [selectedEntry]);
 
+  useEffect(() => {
+    if (selectedEntry?.type !== "image") return undefined;
+
+    let cancelled = false;
+    let imageUrl;
+    getImageSource(selectedEntry.id)
+      .then((url) => {
+        imageUrl = url;
+        if (cancelled) {
+          if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+        } else {
+          setSelectedImage({ id: selectedEntry.id, url });
+        }
+      })
+      .catch((error) => {
+        console.error("[Image] Could not load full-size image:", error);
+      });
+
+    return () => {
+      cancelled = true;
+      if (imageUrl?.startsWith("blob:")) URL.revokeObjectURL(imageUrl);
+    };
+  }, [selectedEntry?.id, selectedEntry?.type]);
+
   // Top-right label reminder popup for newly uploaded unlabeled images
   const [showLabelReminder, setShowLabelReminder] = useState(false);
   const reminderTimerRef = useRef(null);
@@ -89,7 +112,9 @@ export default function App() {
     const task = imageProcessingQueueRef.current.then(async () => {
       for (const entry of candidates) {
         try {
-          const source = entry.imageBlob || entry.blobUrl;
+          const record = await db.images.get(entry.id);
+          const source = record?.imageBlob || record?.blobUrl;
+          if (!source) throw new Error("Image source is unavailable.");
           const thumbnail = await createImageThumbnail(source);
           if (thumbnail) {
             await db.images.update(entry.id, { thumbnailBlob: thumbnail });
@@ -98,7 +123,7 @@ export default function App() {
           }
           const thumbnailUrl = thumbnail ? getImageThumbnailUrl(entry.id, thumbnail) : null;
           const updatePreview = (image) => image.id === entry.id
-            ? { ...image, thumbnailBlob: thumbnail, thumbnailUrl, thumbnailFailed: !thumbnail }
+            ? { ...image, thumbnailUrl, thumbnailFailed: !thumbnail }
             : image;
           setFilteredEntries((current) => current.map(updatePreview));
           setSelectedEntry((current) => current?.id === entry.id ? updatePreview(current) : current);
@@ -134,15 +159,7 @@ export default function App() {
     void Promise.resolve()
       .then(loadEntries)
       .catch((err) => console.error("Failed to load memories:", err));
-    const unsub = subscribeLLMStatus(setLlmStatus);
-    // Initialize LLM in the background
-    initLLM();
-
-   // prewarmOCR();
-    //prewarmDetector();
-  //  prewarmDeepLearningOCR();
     return () => {
-      unsub();
       if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);
     };
   }, [loadEntries]);
@@ -433,6 +450,10 @@ export default function App() {
 
       // 3. Immediately store to database and update UI
       await db.images.bulkAdd(newEntries);
+      files.length = 0;
+      newEntries.forEach((entry) => {
+        delete entry.imageBlob;
+      });
       const updated = await refreshCache();
       const sorted = [...updated].sort((a, b) => b.timestamp - a.timestamp);
       setAllEntries(sorted);
@@ -446,11 +467,13 @@ export default function App() {
 
       // 4. Run OCR pipeline SILENTLY in the background without blocking or showing progress
       const processingTask = imageProcessingQueueRef.current.then(async () => {
-        for (let i = 0; i < files.length; i++) {
-          const file = files[i];
+        for (let i = 0; i < newEntries.length; i++) {
           const entry = newEntries[i];
           try {
-            console.log(`[Vision] Processing image ${i + 1}/${files.length}...`);
+            const record = await db.images.get(entry.id);
+            const file = record?.imageBlob || record?.blobUrl;
+            if (!file) throw new Error("Image source is unavailable.");
+            console.log(`[Vision] Processing image ${i + 1}/${newEntries.length}...`);
             const thumbnail = await createImageThumbnail(file).catch((err) => {
               console.warn("[Vision] Thumbnail creation failed:", err);
               return null;
@@ -463,35 +486,31 @@ export default function App() {
               await db.images.update(entry.id, { thumbnailFailed: true });
             }
             const updatePreview = (image) => image.id === entry.id
-              ? { ...image, thumbnailBlob: thumbnail, thumbnailUrl: previewUrl, thumbnailFailed: !thumbnail }
+              ? { ...image, thumbnailUrl: previewUrl, thumbnailFailed: !thumbnail }
               : image;
             setFilteredEntries((current) => current.map(updatePreview));
             setSelectedEntry((current) => current?.id === entry.id ? updatePreview(current) : current);
 
             // Run OCR first, then detect objects.
-          // Insert a short pause to keep UI responsive during batch processing.
-          await new Promise(r => setTimeout(r, 0));
-          const ocrResult = await performOCR(file).catch((err) => {
-            console.warn("[Vision] OCR error:", err);
-            return "";
-          });
+            // Yield between images so rendering/input can run during batch processing.
+            await new Promise((resolve) => setTimeout(resolve, 0));
             const ocrResult = await performOCR(file).catch((err) => {
               console.warn("[Vision] OCR error:", err);
               return "";
             });
 
-            const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
-            const activePlate = typeof ocrResult === "object" && ocrResult?.plate ? ocrResult.plate : null;
+            let extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
+            let activePlate = typeof ocrResult === "object" && ocrResult?.plate ? ocrResult.plate : null;
+            const plateOcrAttempted = typeof ocrResult === "object" && ocrResult?.plateOcrAttempted;
             const structuredIds = typeof ocrResult === "object" && Array.isArray(ocrResult?.structuredIds) ? ocrResult.structuredIds : [];
-            const cleanText = extractedText.trim();
+            let cleanText = extractedText.trim();
             const validWords = cleanText
               .replace(/[^a-zA-Z\s]/g, " ")
               .split(/\s+/)
               .filter((word) => word.length >= 3);
 
-            const hasVehiclePlate = !!activePlate;
             const hasStructuredId = structuredIds.length > 0;
-            const isTextDominant = hasVehiclePlate || hasStructuredId || validWords.length >= 2;
+            const isTextDominant = !!activePlate || hasStructuredId || validWords.length >= 2;
 
             let visionResult = { labels: [], tags: [], detections: [] };
             if (!isTextDominant) {
@@ -499,7 +518,22 @@ export default function App() {
                 console.warn("[Vision] Vision detection error:", err);
                 return { labels: [], tags: [], detections: [] };
               });
+              const isVehicleImage = (visionResult.labels || []).some((label) =>
+                ["car", "motorcycle", "truck", "bus"].includes(label)
+              );
+              if (!activePlate && isVehicleImage && !plateOcrAttempted) {
+                const plateResult = await recognizeVehiclePlate(file).catch((err) => {
+                  console.warn("[Vision] Plate-focused OCR error:", err);
+                  return null;
+                });
+                if (plateResult?.plate) {
+                  activePlate = plateResult.plate;
+                  extractedText = `Vehicle Plate: ${activePlate}`;
+                  cleanText = `${extractedText}\n${cleanText}`.trim();
+                }
+              }
             }
+            const hasVehiclePlate = !!activePlate;
 
             const isValidTag = (tag) => {
               const clean = tag.replace("#", "").toLowerCase();
@@ -508,17 +542,15 @@ export default function App() {
             };
 
             const textTags = cleanText ? deriveTags(cleanText) : [];
-            const headlineWordTags = validWords.slice(0, 4).map((word) => `#${word.toLowerCase()}`);
             const activeVisionTags = isTextDominant ? [] : (visionResult.tags || []);
             const idTags = structuredIds.map((id) => `#${id.value.toLowerCase()}`);
             const rawCombinedTags = [
               ...textTags,
-              ...headlineWordTags,
               ...activeVisionTags,
               ...idTags,
               ...(hasVehiclePlate ? ["#vehicle", `#${activePlate.replace(/\s+/g, "").toLowerCase()}`] : []),
               ...(hasStructuredId ? ["#document"] : []),
-              ...(isTextDominant && !hasVehiclePlate && !hasStructuredId ? ["#poster", "#graphic"] : ["#photo"]),
+              ...(!isTextDominant ? ["#photo"] : []),
             ];
             const combinedTags = Array.from(new Set(rawCombinedTags.filter(isValidTag)));
             const finalOcrText = activePlate && !cleanText.includes(activePlate)
@@ -553,7 +585,7 @@ export default function App() {
         newEntries.forEach((entry) => thumbnailJobsRef.current.delete(entry.id));
       });
     } catch (err) {
-      console.error("Real‑timeimage upload failed:", err);
+      console.error("Real-time image upload failed:", err);
       alert("Error adding images. Please try again.");
     }
   };
@@ -587,13 +619,13 @@ export default function App() {
       {showLabelReminder && (
         <div className="fixed top-5 right-5 z-50 max-w-sm animate-in fade-in slide-in-from-top-4 duration-300">
           <div className="bg-slate-900/95 border border-amber-500/50 shadow-2xl rounded-2xl p-3.5 backdrop-blur-md flex items-start gap-3 text-slate-100">
-            <span className="text-xl shrink-0 mt-0.5">🏷️</span>
+            <span className="text-xs font-semibold uppercase tracking-wide text-amber-300 shrink-0 mt-1">Label</span>
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-amber-300">
                 Unlabeled image uploaded
               </p>
               <p className="text-[11px] text-slate-300 mt-0.5 leading-snug">
-                Add a quick label (e.g. "Selfie", "License") so voice search retrieves it with 100% precision!
+                Add a quick label (for example, "Selfie" or "License Plate") to make voice search more reliable.
               </p>
               <div className="flex items-center gap-2 mt-2">
                 <button
@@ -621,7 +653,7 @@ export default function App() {
               className="text-slate-500 hover:text-slate-300 text-xs p-1"
               aria-label="Close reminder"
             >
-              ✕
+              Close
             </button>
           </div>
         </div>
@@ -635,25 +667,10 @@ export default function App() {
             VoicePAD
           </h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            Real‑time
+            Real-time
           </p>
         </div>
                 <div className="flex items-center gap-2">
-          {llmStatus.state === "loading" && !llmStatus.isCached && (
-            <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-indigo-950/80 border border-indigo-700/50 text-indigo-300 animate-pulse">
-              🧠 Downloading AI ({llmStatus.progress}%)
-            </span>
-          )}
-          {llmStatus.state === "cached_loading" && (
-            <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-indigo-950/50 border border-indigo-800/40 text-indigo-300/80">
-              ⚡ Initializing...
-            </span>
-          )}
-          {llmStatus.state === "ready" && (
-            <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-700/50 text-emerald-300">
-              ⚡ Local AI Ready
-            </span>
-          )}
           <span className="text-[11px] font-mono tracking-wider uppercase px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-slate-400">
             Local-First
           </span>
@@ -667,7 +684,7 @@ export default function App() {
           {(voiceTranscript || isListening) && (
             <div className="absolute -top-10 -right-8 z-20 flex flex-col items-start max-w-[210px] animate-in fade-in zoom-in-95 duration-200">
               <div className="relative px-3 py-1.5 bg-indigo-600 text-white rounded-2xl rounded-bl-sm shadow-xl border border-indigo-400/40 flex items-center gap-1.5 backdrop-blur-md">
-                <span className="text-xs">💭</span>
+                <span className="text-[10px] font-semibold uppercase">Voice</span>
                 <span className="text-xs font-medium tracking-tight truncate max-w-[150px]">
                   {voiceTranscript ? `"${voiceTranscript}"` : "Listening..."}
                 </span>
@@ -678,7 +695,7 @@ export default function App() {
                     title="Clear voice query"
                     aria-label="Clear voice query"
                   >
-                    ✕
+                    Clear
                   </button>
                 )}
               </div>
@@ -697,16 +714,16 @@ export default function App() {
                 ? "bg-rose-600 shadow-rose-600/40 ring-4 ring-rose-500/40 scale-105"
                 : "bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/30 ring-4 ring-indigo-500/20"
             }`}
-            aria-label="Activate voice search"
+            aria-label={isListening ? "Stop voice search" : "Start voice search"}
           >
-            <span className="text-3xl mb-1 select-none">{isListening ? "🛑" : "🎙️"}</span>
+            <span className="text-sm mb-1 font-semibold uppercase select-none">{isListening ? "Stop" : "Speak"}</span>
             <span className="text-[10px] font-semibold tracking-wider uppercase text-white/90 select-none">
-              {isListening ? "Listening" : "Tap to Ask"}
+              {isListening ? "Listening" : "Voice Search"}
             </span>
           </button>
         </div>
 
-        {/* Image Capture — gallery supports selecting multiple images */}
+        {/* Image capture - gallery supports selecting multiple images */}
         <div className="w-full flex items-center justify-center gap-3 my-2">
           <input
     ref={fileInputRef}
@@ -729,8 +746,7 @@ export default function App() {
     onClick={() => cameraInputRef.current?.click()}
     className="flex-1 max-w-[170px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold border transition shadow-sm bg-indigo-600 hover:bg-indigo-500 border-indigo-500/40 text-white active:scale-95"
   >
-    <span className="text-base">📸</span>
-    <span>Live Capture</span>
+    <span>Take Photo</span>
   </button>
   {/* 2. Gallery / File Upload */}
   <button
@@ -738,23 +754,22 @@ export default function App() {
     onClick={() => fileInputRef.current?.click()}
     className="flex-1 max-w-[170px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-medium border transition shadow-sm bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-slate-700 text-slate-200 active:scale-95"
   >
-    <span className="text-base">📁</span>
     <span>Upload Photos</span>
   </button>
         </div>
 
-        {/* Search Bar — manual text filter */}
+        {/* Search bar - manual text filter */}
         <form onSubmit={handleSearchSubmit} className="w-full mt-4">
           <div className="relative flex items-center">
             <span className="absolute left-3 text-slate-500 text-sm pointer-events-none">
-              🔍
+              <span className="text-[10px] font-semibold uppercase">Search</span>
             </span>
             <input
               type="text"
-              placeholder="Search memories… filters feed as you type"
+              placeholder="Search memories - results update as you type"
               value={query}
               onChange={handleQueryChange}
-              className="w-full pl-9 pr-24 py-3 bg-slate-900/90 border border-slate-800 rounded-xl text-sm placeholder-slate-500 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition shadow-inner"
+              className="w-full pl-16 pr-24 py-3 bg-slate-900/90 border border-slate-800 rounded-xl text-sm placeholder-slate-500 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition shadow-inner"
             />
             {query && (
               <button
@@ -765,8 +780,9 @@ export default function App() {
                   setFilteredEntries(allEntries.slice(0, 20));
                 }}
                 className="absolute right-20 text-slate-500 hover:text-slate-300 text-xs"
+                aria-label="Clear search"
               >
-                ✕
+                Clear
               </button>
             )}
             
@@ -788,7 +804,7 @@ export default function App() {
           <div className="flex gap-2">
             <input
               type="text"
-              placeholder="Jot a note — tags auto-detected from what you type…"
+              placeholder="Write a note - tags are detected as you type"
               value={manualNote}
               onChange={handleNoteChange}
               className="flex-1 px-3 py-2 bg-slate-900/50 border border-slate-800/80 rounded-lg text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-slate-700"
@@ -816,7 +832,7 @@ export default function App() {
           )}
         </form>
 
-        {/* Feed — with in-card editing */}
+        {/* Feed with in-card editing */}
         <section className="w-full mt-8">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
@@ -889,6 +905,7 @@ export default function App() {
                     onClick={() => {
                       if (!isEditing) {
                         setOcrExpandedId(null);
+                        setSelectedImage(null);
                         setSelectedEntry(entry);
                       }
                     }}
@@ -909,16 +926,16 @@ export default function App() {
                               title={`${ocrExpandedId === entry.id ? "Hide" : "Show"} extracted text`}
                               className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
                             >
-                              📷 OCR {ocrExpandedId === entry.id ? "⌃" : "⌄"}
+                              OCR {ocrExpandedId === entry.id ? "Collapse" : "Expand"}
                             </button>
                           ) : (
                             <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
-                              {entry.type === "image" ? "🖼️ Image" : "📝 Note"}
+                              {entry.type === "image" ? "Image" : "Note"}
                             </span>
                           )}
                           {entry.label ? (
                             <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/40 text-indigo-300 flex items-center gap-1">
-                              🏷️ {entry.label}
+                              Label: {entry.label}
                             </span>
                           ) : entry.type === "image" ? (
                             <button
@@ -926,7 +943,7 @@ export default function App() {
                               className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-600/40 text-amber-300 hover:bg-amber-900/90 transition flex items-center gap-1"
                               title="Click to add a label for instant search"
                             >
-                              🏷️ + Label
+                              + Add Label
                             </button>
                           ) : null}
                         </div>
@@ -994,7 +1011,7 @@ export default function App() {
                             </div>
                             {editingError && (
                               <p className="text-[11px] text-rose-400 mt-1 font-medium animate-in fade-in">
-                                ⚠️ {editingError}
+                                Error: {editingError}
                               </p>
                             )}
                           </div>
@@ -1012,7 +1029,7 @@ export default function App() {
                                 />
                               ) : (
                                 <span className="px-4 text-center text-xs text-slate-500">
-                                  {entry.thumbnailFailed ? "Preview unavailable · tap to open" : "Preparing preview…"}
+                                  {entry.thumbnailFailed ? "Preview unavailable - tap to open" : "Preparing preview..."}
                                 </span>
                               )}
                             </div>
@@ -1076,7 +1093,7 @@ export default function App() {
                               title="Edit memory"
                               aria-label="Edit memory"
                             >
-                              ✏️
+                              Edit
                             </button>
                             <button
                               onClick={(e) => handleDeleteEntry(entry, e)}
@@ -1084,7 +1101,7 @@ export default function App() {
                               title="Delete memory"
                               aria-label="Delete memory"
                             >
-                              🗑️
+                              Delete
                             </button>
                           </div>
                         </div>
@@ -1098,7 +1115,7 @@ export default function App() {
         </section>
       </main>
 
-      {/* ── Centered zoomed memory card ───────────────────────────────────── */}
+      {/* Centered zoomed memory card */}
       {selectedEntry && (() => {
         const modalEntry = selectedEntry;
         const modalPure =
@@ -1131,23 +1148,23 @@ export default function App() {
                       aria-label={`${ocrExpandedId === modalEntry.id ? "Hide" : "Show"} extracted OCR text`}
                       className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
                     >
-                      📷 OCR {ocrExpandedId === modalEntry.id ? "⌃" : "⌄"}
+                      OCR {ocrExpandedId === modalEntry.id ? "Collapse" : "Expand"}
                     </button>
                   ) : (
                     <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
-                      {modalEntry.type === "image" ? "🖼️ Image" : "📝 Note"}
+                      {modalEntry.type === "image" ? "Image" : "Note"}
                     </span>
                   )}
                   {modalEntry.label ? (
                     <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/40 text-indigo-300 flex items-center gap-1">
-                      🏷️ {modalEntry.label}
+                      Label: {modalEntry.label}
                     </span>
                   ) : modalEntry.type === "image" ? (
                     <button
                       onClick={() => { startEditing(modalEntry); setSelectedEntry(null); }}
                       className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-600/40 text-amber-300 hover:bg-amber-900/90 transition flex items-center gap-1"
                     >
-                      🏷️ + Label
+                      + Add Label
                     </button>
                   ) : null}
                 </div>
@@ -1162,7 +1179,7 @@ export default function App() {
                       title="Edit memory"
                       aria-label="Edit memory"
                     >
-                      ✏️
+                      Edit
                     </button>
                     <button
                       onClick={(event) => { handleDeleteEntry(modalEntry, event); setSelectedEntry(null); }}
@@ -1170,7 +1187,7 @@ export default function App() {
                       title="Delete memory"
                       aria-label="Delete memory"
                     >
-                      🗑️
+                      Delete
                     </button>
                   </div>
                 </div>
@@ -1179,13 +1196,17 @@ export default function App() {
               {modalEntry.type === "image" ? (
                 <div className="mt-1 space-y-2">
                   <div className="w-full max-h-[70vh] rounded-xl overflow-hidden bg-slate-950 border border-slate-800/90 flex items-center justify-center p-1 group">
-                    <img
-                      src={modalEntry.blobUrl}
-                      alt={modalEntry.label || "Image"}
-                      loading="eager"
-                      decoding="async"
-                      className="max-h-[68vh] w-full object-contain rounded-lg"
-                    />
+                    {selectedImage?.id === modalEntry.id ? (
+                      <img
+                        src={selectedImage.url}
+                        alt={modalEntry.label || "Image"}
+                        loading="eager"
+                        decoding="async"
+                        className="max-h-[68vh] w-full object-contain rounded-lg"
+                      />
+                    ) : (
+                      <span className="text-sm text-slate-400">Loading image...</span>
+                    )}
                   </div>
                   {!modalPure && ocrExpandedId === modalEntry.id && modalEntry.ocr && (
                     <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">

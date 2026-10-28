@@ -12,7 +12,8 @@ const semanticPatterns = [
   { pattern: /\b(my\s+)?(bike|scooty|car|vehicle|scooter|cycle|ev|moped|auto|cab|truck|van|twowheeler|fourwheeler)\b/, tags: ["#vehicle"] },
   { pattern: /\b(parked|parking|park)\s+(my|the)?\s*\w+/, tags: ["#parking"] },
   { pattern: /\b(fuel|petrol|diesel|filled|pump)\b/, tags: ["#fuel"] },
-  { pattern: /\b(number\s*plate|license\s*plate|registration|rc\s*book|plate)\b/, tags: ["#vehicle", "#document"] },
+  { pattern: /\b(number\s*plate|license\s*plate|plate)\b/, tags: ["#vehicle"] },
+  { pattern: /\b(registration|rc\s*book)\b/, tags: ["#vehicle", "#document"] },
   { pattern: /\b(drove|riding|drive|ride)\b/, tags: ["#vehicle"] },
   // Match standard vehicle registration formats (e.g. BR01, DL04, MH12, etc.)
   { pattern: /\b[A-Z]{2}\s*\d{1,2}\s*[A-Z]{0,3}\s*\d{3,4}\b/i, tags: ["#vehicle"] },
@@ -25,35 +26,36 @@ const semanticPatterns = [
   { pattern: /\b(christmas|xmas|new\s*year|eid|holi)\b/, tags: ["#festival", "#celebration"] },
 
   // ── Photos & Selfies ──────────────────────────────────────────────────────
-  { pattern: /\b(selfie|photo|picture|pic|pics|portrait|snap|my\s+face|photo\s+of\s+me|my\s+selfie|my\s+photo|camera\s+roll)\b/, tags: ["#photo", "#selfie"] },
+  { pattern: /\b(selfie|my\s+face|photo\s+of\s+me|my\s+selfie)\b/, tags: ["#photo", "#selfie"] },
+  { pattern: /\b(photo|picture|pic|pics|portrait|snap|camera\s+roll)\b/, tags: ["#photo"] },
 
   // ── Security / Credentials ────────────────────────────────────────────────
-  { pattern: /\b(password|passwd|pwd|pass|passcode)\b/, tags: ["#security"] },
+  { pattern: /\b(password|passwd|pwd|passcode)\b/, tags: ["#security"] },
   { pattern: /\b(pin|mpin|atm\s*pin|otp)\b/, tags: ["#security"] },
-  { pattern: /\b(wifi|wi-fi|network|hotspot)\s*(password|key|code|name)?\b/, tags: ["#security"] },
+  { pattern: /\b(wifi|wi-fi|hotspot)\b[\s\S]{0,80}\b(password|key|code|name)\b|\bnetwork\s+(password|key|code)\b/, tags: ["#security"] },
   { pattern: /\b(locker|lock\s*code|safe\s*code|combination)\b/, tags: ["#security"] },
   { pattern: /\b(secret|credentials|login|username)\b/, tags: ["#security"] },
   { pattern: /\b(door|room|gate|cabinet|cupboard)\s*(code|key|number|pin|password)\b/, tags: ["#security"] },
 
   // ── Finance ───────────────────────────────────────────────────────────────
-  { pattern: /\b(account\s*number|acc\s*no|bank\s*acc)\b/, tags: ["#finance"] },
+  { pattern: /\b(account\s*number|acc\s*no|bank\s*acc|credit\s*card|debit\s*card|bank\s*card)\b/, tags: ["#finance"] },
   { pattern: /\b(ifsc|swift|iban|micr)\b/, tags: ["#finance"] },
   { pattern: /\b(gpay|google\s*pay|phonepe|paytm|upi\s*id|upi)\b/, tags: ["#finance"] },
   { pattern: /\b(emi|instalment|loan|borrowed|lent|lend|borrow)\b/, tags: ["#finance"] },
   { pattern: /\b(salary|income|earned|transfer|credited|debited)\b/, tags: ["#finance"] },
-  { pattern: /\b(invest|stock|share|mutual\s*fund|fd|fixed\s*deposit|ppf|sip)\b/, tags: ["#finance"] },
+  { pattern: /\b(invest|mutual\s*fund|fd|fixed\s*deposit|ppf|sip)\b|\b(stock\s+market|stock\s+portfolio|share\s+price|shares?\s+(bought|sold|portfolio))\b/, tags: ["#finance"] },
   { pattern: /\b(tax|gst|itr|return\s*file)\b/, tags: ["#finance"] },
   { pattern: /\b(paid|owe|owes|owed|got\s*paid|send\s*money|receive\s*money)\b/, tags: ["#finance"] },
   { pattern: /₹[\d,]+|\brs\.?\s*\d+|\brupees?\b/, tags: ["#finance"] },
 
   // ── Bills / Subscriptions ─────────────────────────────────────────────────
   { pattern: /\b(electricity|light\s*bill|power\s*bill|eb\s*bill)\b/, tags: ["#bill"] },
-  { pattern: /\b(water\s*bill|sewage|maintenance\s*fee|society\s*fee)\b/, tags: ["#bill"] },
+  { pattern: /\b(water\s*bill|gas\s*bill|sewage|maintenance\s*fee|society\s*fee)\b/, tags: ["#bill"] },
   { pattern: /\b(internet\s*bill|broadband|jio|airtel|bsnl|vi|vodafone)\b/, tags: ["#bill"] },
-  { pattern: /\b(recharge|mobile\s*recharge|prepaid|postpaid|plan)\b/, tags: ["#bill"] },
+  { pattern: /\b(recharge|mobile\s*recharge|prepaid|postpaid|mobile\s+plan)\b/, tags: ["#bill"] },
   { pattern: /\b(netflix|hotstar|prime|spotify|youtube\s*premium|subscription)\b/, tags: ["#bill"] },
   { pattern: /\b(due\s*date|last\s*date|pay\s*before|deadline)\b/, tags: ["#bill", "#reminder"] },
-  { pattern: /\b(pending\s*bill|unpaid|due)\b/, tags: ["#bill"] },
+  { pattern: /\b(pending\s*bill|unpaid|bill\s+due|due\s+bill)\b/, tags: ["#bill"] },
 
   // ── Documents & IDs ───────────────────────────────────────────────────────
   { pattern: /\b(aadhaar|aadhar)\b/, tags: ["#document"] },
@@ -68,14 +70,14 @@ const semanticPatterns = [
   { pattern: /\b(medicine|tablet|capsule|syrup|injection|dose|dosage)\b/, tags: ["#health"] },
   { pattern: /\b(doctor|physician|specialist|hospital|clinic|pharmacy)\b/, tags: ["#health"] },
   { pattern: /\b(prescription|rx)\b/, tags: ["#health"] },
-  { pattern: /\b(blood\s*test|urine\s*test|xray|x-ray|mri|scan|report)\b/, tags: ["#health"] },
+  { pattern: /\b(blood\s*test|urine\s*test|xray|x-ray|mri|ct\s+scan|medical\s+scan|medical\s+report|lab\s+report)\b/, tags: ["#health"] },
   { pattern: /\b(blood\s*pressure|bp|sugar|diabetes|cholesterol|thyroid)\b/, tags: ["#health"] },
   { pattern: /\b(appointment|checkup|check-up|consultation)\b/, tags: ["#health", "#reminder"] },
   { pattern: /\b(allergy|allergic|side\s*effect)\b/, tags: ["#health"] },
 
   // ── Travel ────────────────────────────────────────────────────────────────
-  { pattern: /\b(flight|airline|airport|terminal|gate|boarding)\b/, tags: ["#travel"] },
-  { pattern: /\b(train|irctc|pnr|railway|platform|station)\b/, tags: ["#travel"] },
+  { pattern: /\b(flight|airline|airport|terminal|boarding)\b/, tags: ["#travel"] },
+  { pattern: /\b(train|irctc|pnr|railway|platform|train\s+station)\b/, tags: ["#travel"] },
   { pattern: /\b(hotel|hostel|resort|check-?in|check-?out|booking\s*id)\b/, tags: ["#travel"] },
   { pattern: /\b(trip|vacation|holiday|tour|itinerary)\b/, tags: ["#travel"] },
 
@@ -91,7 +93,7 @@ const semanticPatterns = [
   { pattern: /\b(amazon|flipkart|swiggy|blinkit|zepto)\b/, tags: ["#shopping"] },
 
   // ── Contacts & Addresses ─────────────────────────────────────────────────
-  { pattern: /\b(address|flat\s*no|apartment|building|street|area|colony)\b/, tags: ["#contact"] },
+  { pattern: /\b(address|flat\s*no|apartment|building|street|colony)\b/, tags: ["#contact"] },
   { pattern: /\b(phone\s*number|mobile\s*number|contact\s*number)\b/, tags: ["#contact"] },
   { pattern: /\b(pincode|zip\s*code|postal\s*code)\b/, tags: ["#contact"] },
 ];
@@ -130,23 +132,6 @@ export function deriveTags(text) {
 
   // Remove any blacklisted tags
   BLACKLIST.forEach((b) => allTags.delete(b));
-
-  return Array.from(allTags).sort();
-}
-  if (!text || !text.trim()) return [];
-
-  const lowerText = text.toLowerCase();
-  const allTags = new Set();
-
-  // A. Strict alias map lookup
-  aliasLookup(text).forEach((t) => allTags.add(t));
-
-  // B. Pattern-based semantic rules
-  semanticPatterns.forEach(({ pattern, tags }) => {
-    if (pattern.test(lowerText)) {
-      tags.forEach((t) => allTags.add(t));
-    }
-  });
 
   return Array.from(allTags).sort();
 }

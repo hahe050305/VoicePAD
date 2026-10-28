@@ -3,7 +3,9 @@ import { Capacitor } from "@capacitor/core";
 import { Filesystem, Directory } from "@capacitor/filesystem";
 import { TextRecognition } from "@capacitor-mlkit/text-recognition";
 import { parsePlateString } from "./services/plateService.js";
-import { recognizeWithTesseract } from "./services/tesseractService.js";
+import { scoreOcrText } from "./services/ocrRanking.js";
+import { createOcrVariants } from "./services/ocrPreprocessService.js";
+import { recognizeWithTesseractEnhancements } from "./services/tesseractService.js";
 
 export function isPureImageText(text) {
   if (!text || !text.trim()) return true;
@@ -21,6 +23,25 @@ export function isPureImageText(text) {
 
 export function extractVehiclePlate(rawText) {
   return parsePlateString(rawText);
+}
+
+function hasPlateLikeText(text) {
+  const tokens = String(text || "").toUpperCase().match(/[A-Z0-9]+/g) || [];
+  for (let start = 0; start < tokens.length; start++) {
+    let candidate = "";
+    for (let count = 0; count < 5 && start + count < tokens.length; count++) {
+      candidate += tokens[start + count];
+      if (candidate.length > 12) break;
+      if (
+        candidate.length >= 6 &&
+        (candidate.match(/[A-Z]/g) || []).length >= 2 &&
+        (candidate.match(/\d/g) || []).length >= 3
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 export function extractStructuredIds(rawText) {
@@ -57,10 +78,11 @@ function blobToBase64(blob) {
 /**
  * 1. Native On-Device OCR (Android / iOS):
  * Uses Google Play Services ML Kit via @capacitor-mlkit/text-recognition.
- * Hardware accelerated, zero UI freeze, handles arbitrary angles and 2-line plates.
+ * The native plugin handles recognition asynchronously and supports arbitrary angles and 2-line plates.
  */
 async function recognizeWithNativeMLKit(file) {
-  const tempName = `ocr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`;
+  const extension = file.type === "image/png" ? "png" : "jpg";
+  const tempName = `ocr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.${extension}`;
   try {
     const base64 = await blobToBase64(file);
     await Filesystem.writeFile({
@@ -81,19 +103,59 @@ async function recognizeWithNativeMLKit(file) {
     const fullText = result?.text?.trim() || "";
     return {
       text: fullText,
-      confidence: fullText ? 95 : 0,
+      confidence: 0,
     };
   } finally {
     await Filesystem.deleteFile({
       path: tempName,
       directory: Directory.Cache,
-    }).catch(() => {});
+    }).catch((error) => {
+      console.warn("[OCR] Temporary image cleanup failed:", error);
+    });
   }
+}
+
+async function recognizeWithNativeEnhancements(file) {
+  let processed = {
+    baseline: null,
+    variants: [],
+    perspectiveVariants: [],
+    focusedRegions: [],
+    rotated: [],
+  };
+  try {
+    processed = await createOcrVariants(file);
+  } catch (error) {
+    console.warn("[OCR] Native image enhancement unavailable; using original:", error);
+  }
+
+  let bestResult = null;
+  let bestScore = -1;
+  const candidates = [
+    processed.baseline || file,
+    ...processed.perspectiveVariants,
+    ...processed.variants,
+    ...processed.focusedRegions,
+  ].slice(0, 5);
+  for (const candidate of candidates) {
+    try {
+      const result = await recognizeWithNativeMLKit(candidate);
+      const score = scoreOcrText(result.text);
+      if (score > bestScore) {
+        bestResult = result;
+        bestScore = score;
+      }
+    } catch (error) {
+      console.warn("[OCR] Native ML Kit pass failed; continuing with other variants:", error);
+    }
+  }
+  if (bestResult) return bestResult;
+  throw new Error("All native OCR passes failed.");
 }
 
 /**
  * 2. Web / Browser Dev Fallback:
- * Uses browser native Shape Detection API (window.TextDetector) or single Tesseract pass.
+ * Uses browser native Shape Detection API (window.TextDetector) or a Tesseract worker pass.
  */
 async function recognizeWithWeb(file, onProgress) {
   let nativeText = "";
@@ -104,161 +166,98 @@ async function recognizeWithWeb(file, onProgress) {
       bitmap = await createImageBitmap(file);
       const detections = await detector.detect(bitmap);
       nativeText = (detections || []).map((d) => d.rawValue || "").join("\n").trim();
-    } catch (_) {
+    } catch (error) {
+      console.warn("[OCR] Browser text detection failed; trying Tesseract:", error);
     } finally {
       bitmap?.close();
     }
   }
 
-  if (nativeText && nativeText.length >= 4) {
-    return { text: nativeText, confidence: 90 };
-  }
-
-  // Tesseract single pass fallback (PSM 6: Uniform block of multi-line text)
-  const ret = await recognizeWithTesseract(file, { plate: false, onProgress }).catch(() => null);
+  // Tesseract compares the original with contrast and adaptive-threshold variants.
+  const ret = await recognizeWithTesseractEnhancements(file, { plate: false, onProgress }).catch((error) => {
+    console.warn("[OCR] Tesseract recognition failed:", error);
+    return null;
+  });
   const raw = ret?.data?.text?.trim() || "";
   const conf = Math.round(Number(ret?.data?.confidence) || 0);
-  return { text: raw, confidence: conf };
+  return { text: raw || nativeText, confidence: raw ? conf : 0 };
+}
+
+async function recognizePlateCandidate(file, text, onProgress) {
+  if (extractVehiclePlate(text) || !hasPlateLikeText(text)) {
+    return { text, attempted: false };
+  }
+  try {
+    const result = await recognizeVehiclePlate(file, onProgress);
+    return {
+      text: result.plate ? `${text}\n${result.rawText}` : text,
+      attempted: true,
+    };
+  } catch (error) {
+    console.warn("[OCR] Plate-focused recognition failed; keeping primary OCR text:", error);
+    return { text, attempted: true };
+  }
+}
+
+export async function recognizeVehiclePlate(file, onProgress) {
+  const result = await recognizeWithTesseractEnhancements(file, { plate: true, onProgress });
+  const rawText = result?.data?.text?.trim() || "";
+  return {
+    rawText,
+    plate: extractVehiclePlate(rawText),
+    confidence: Math.round(Number(result?.data?.confidence) || 0),
+  };
 }
 
 /**
  * High-performance, on-device OCR pipeline:
  * Automatically routes to native Google ML Kit on mobile or browser engine in development.
  */
+let ocrQueue = Promise.resolve();
+
 export async function performOCR(file, onProgress) {
-  // Use a dedicated OCR queue to avoid flooding the UI thread.
-  if (!window.__ocrQueue) {
-    window.__ocrQueue = Promise.resolve();
-  }
-  const task = window.__ocrQueue.then(() => _performOCR(file, onProgress)).catch(() => ({ text: "", confidence: 0 }));
-  window.__ocrQueue = task;
+  const task = ocrQueue.then(() => _performOCR(file, onProgress));
+  ocrQueue = task.catch(() => {});
   return task;
 }
 
 // Internal OCR implementation separated from the exported queue wrapper.
 async function _performOCR(file, onProgress) {
-  let recognizedText = "";
-  let confidence = 0;
+  let result;
   try {
     if (Capacitor.isNativePlatform()) {
-      const mlKitResult = await recognizeWithNativeMLKit(file);
-      recognizedText = mlKitResult.text;
-      confidence = mlKitResult.confidence;
+      result = await recognizeWithNativeEnhancements(file);
     } else {
-      const webResult = await recognizeWithWeb(file, onProgress);
-      recognizedText = webResult.text;
-      confidence = webResult.confidence;
+      result = await recognizeWithWeb(file, onProgress);
     }
   } catch (err) {
     console.warn("[OCR] Primary recognition error, falling back to Web OCR:", err);
-    const webFallback = await recognizeWithWeb(file, onProgress).catch(() => ({ text: "", confidence: 0 }));
-    recognizedText = webFallback.text;
-    confidence = webFallback.confidence;
+    result = await recognizeWithWeb(file, onProgress).catch((fallbackError) => {
+      console.warn("[OCR] Web OCR fallback failed:", fallbackError);
+      return { text: "", confidence: 0 };
+    });
   }
 
+  const plateRecognition = await recognizePlateCandidate(file, result.text, onProgress);
+  const recognizedText = plateRecognition.text;
+  const confidence = result.confidence;
   const plate = extractVehiclePlate(recognizedText);
   const structuredIds = extractStructuredIds(recognizedText);
 
-  const WATERMARK_WORDS = new Set([
-    "shutterstock",
-    "shutterstockcom",
-    "getty",
-    "gettyimages",
-    "alamy",
-    "stock",
-    "adobe",
-    "adobestock",
-    "depositphotos",
-    "vector",
-    "watermark",
-    "photo",
-    "image",
-    "copyright",
-    "com",
-  ]);
-
-  const validWords = recognizedText
-    .replace(/[^a-zA-Z\s]/g, " ")
-    .split(/\s+/)
-    .map((w) => w.trim().toLowerCase())
-    .filter((w) => w.length >= 3 && /[aeiou]/.test(w) && !WATERMARK_WORDS.has(w));
-
-  const uniqueWords = Array.from(new Set(validWords));
-
-  let cleanDisplayText = "";
-  if (plate) {
-    cleanDisplayText = `Vehicle Plate: ${plate}`;
-  } else if (structuredIds.length > 0) {
-    cleanDisplayText = structuredIds.map((id) => `${id.type.toUpperCase()}: ${id.value}`).join("\n");
-  } else {
-    cleanDisplayText = uniqueWords.join(" ");
-  }
+  const cleanDisplayText = recognizedText.trim();
+  const displayText = plate && !cleanDisplayText.includes(plate)
+    ? `Vehicle Plate: ${plate}\n${cleanDisplayText}`.trim()
+    : cleanDisplayText;
 
   const isPure = !plate && structuredIds.length === 0 && cleanDisplayText.length === 0;
 
   return {
-    text: cleanDisplayText,
+    text: displayText,
     rawText: recognizedText,
     isPureImage: isPure,
-    confidence: plate ? Math.max(90, confidence) : confidence,
+    confidence,
     plate,
-    structuredIds,
-  };
-}
-  let recognizedText = "";
-  let confidence = 0;
-
-  try {
-    if (Capacitor.isNativePlatform()) {
-      const mlKitResult = await recognizeWithNativeMLKit(file);
-      recognizedText = mlKitResult.text;
-      confidence = mlKitResult.confidence;
-    } else {
-      const webResult = await recognizeWithWeb(file, onProgress);
-      recognizedText = webResult.text;
-      confidence = webResult.confidence;
-    }
-  } catch (err) {
-    console.warn("[OCR] Primary recognition error, falling back to Web OCR:", err);
-    const webFallback = await recognizeWithWeb(file, onProgress).catch(() => ({ text: "", confidence: 0 }));
-    recognizedText = webFallback.text;
-    confidence = webFallback.confidence;
-  }
-
-  const plate = extractVehiclePlate(recognizedText);
-  const structuredIds = extractStructuredIds(recognizedText);
-
-  const WATERMARK_WORDS = new Set([
-    "shutterstock", "shutterstockcom", "getty", "gettyimages",
-    "alamy", "stock", "adobe", "adobestock", "depositphotos",
-    "vector", "watermark", "photo", "image", "copyright", "com"
-  ]);
-
-  const validWords = recognizedText
-    .replace(/[^a-zA-Z\s]/g, " ")
-    .split(/\s+/)
-    .map((w) => w.trim().toLowerCase())
-    .filter((w) => w.length >= 3 && /[aeiou]/.test(w) && !WATERMARK_WORDS.has(w));
-
-  const uniqueWords = Array.from(new Set(validWords));
-
-  let cleanDisplayText = "";
-  if (plate) {
-    cleanDisplayText = `Vehicle Plate: ${plate}`;
-  } else if (structuredIds.length > 0) {
-    cleanDisplayText = structuredIds.map((id) => `${id.type.toUpperCase()}: ${id.value}`).join("\n");
-  } else {
-    cleanDisplayText = uniqueWords.join(" ");
-  }
-
-  const isPure = !plate && structuredIds.length === 0 && cleanDisplayText.length === 0;
-
-  return {
-    text: cleanDisplayText,
-    rawText: recognizedText,
-    isPureImage: isPure,
-    confidence: plate ? Math.max(90, confidence) : confidence,
-    plate,
+    plateOcrAttempted: plateRecognition.attempted,
     structuredIds,
   };
 }

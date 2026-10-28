@@ -5,6 +5,10 @@ const INCIDENTAL_PROPS = new Set([
   "chair", "dining table", "cup", "bottle", "bowl", "fork", "knife", "spoon",
   "mouse", "keyboard", "remote", "bench", "vase", "potted plant", "fire hydrant", "traffic light",
 ]);
+const LOW_MEMORY_DEVICE = typeof navigator !== "undefined" &&
+  Number.isFinite(navigator.deviceMemory) &&
+  navigator.deviceMemory <= 4;
+const MAX_INFERENCE_DIMENSION = LOW_MEMORY_DEVICE ? 320 : 384;
 
 async function getDetector() {
   if (!detectorPromise) {
@@ -30,7 +34,8 @@ async function getDetector() {
           AutoModelForObjectDetection.from_pretrained(modelId, { device, dtype }),
           AutoProcessor.from_pretrained(modelId),
         ]);
-      } catch {
+      } catch (error) {
+        console.warn("[Vision] WebGPU initialization failed; falling back to quantized WASM:", error);
         [model, processor] = await Promise.all([
           AutoModelForObjectDetection.from_pretrained(modelId, { device: "wasm", dtype: "q8" }),
           AutoProcessor.from_pretrained(modelId),
@@ -49,8 +54,7 @@ async function makeInferenceUrl(imageSource) {
   const blob = await toBlob(imageSource);
   const bitmap = await createImageBitmap(blob);
   try {
-    const maxDim = 320; // Smaller size for faster inference & less UI load.
-    const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+    const scale = Math.min(1, MAX_INFERENCE_DIMENSION / Math.max(bitmap.width, bitmap.height));
     if (scale === 1) return URL.createObjectURL(blob);
     if (typeof OffscreenCanvas !== "function") return URL.createObjectURL(blob);
 
@@ -74,7 +78,7 @@ async function toBlob(imageSource) {
 async function createThumbnail(imageSource) {
   const bitmap = await createImageBitmap(await toBlob(imageSource));
   try {
-    const maxDim = 480;
+    const maxDim = LOW_MEMORY_DEVICE ? 320 : 480;
     const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
     const width = Math.max(1, Math.round(bitmap.width * scale));
     const height = Math.max(1, Math.round(bitmap.height * scale));
@@ -101,8 +105,8 @@ async function detect(imageSource, threshold) {
     const salient = detections.filter((item) => {
       const width = Math.max(0, (item.box?.xmax ?? 0) - (item.box?.xmin ?? 0));
       const height = Math.max(0, (item.box?.ymax ?? 0) - (item.box?.ymin ?? 0));
-      const area = width * height;
-      return INCIDENTAL_PROPS.has(item.label) ? area >= 0.15 : area >= 0.05;
+      const area = (width * height) / 10000;
+      return INCIDENTAL_PROPS.has(item.label) ? area >= 0.015 : area >= 0.003;
     });
     const labels = [...new Set(salient.map((item) => item.label))];
     const tags = new Set();
@@ -121,24 +125,11 @@ self.onmessage = async ({ data }) => {
   try {
     let result;
     if (data.type === "detectPlate") {
-      // Specialized plate detection – return the most confident plate box.
       const detections = await detect(data.imageSource, data.threshold);
-      // Find detection with label containing "plate".
       const plates = detections.detections.filter((d) => /plate/i.test(d.label));
-      if (plates.length === 0) throw new Error("No plate detected");
-      const best = plates.reduce((a, b) => (a.score > b.score ? a : b));
-      const { box } = best;
-      // Convert normalized box (0‑1) to absolute pixel values later in the crop worker.
-      result = {
-        box: {
-          xmin: box.xmin,
-          ymin: box.ymin,
-          xmax: box.xmax,
-          ymax: box.ymax,
-          angle: 0, // YOLO tiny does not provide rotation; assume 0.
-        },
-        score: best.score,
-      };
+      const best = plates.reduce((current, candidate) =>
+        current && current.score > candidate.score ? current : candidate, null);
+      result = best ? { box: best.box, score: best.score } : null;
     } else {
       result = data.type === "thumbnail"
         ? await createThumbnail(data.imageSource)
@@ -148,12 +139,4 @@ self.onmessage = async ({ data }) => {
   } catch (error) {
     self.postMessage({ id: data.id, error: error?.message || "Vision detection failed." });
   };
-  try {
-    const result = data.type === "thumbnail"
-      ? await createThumbnail(data.imageSource)
-      : await detect(data.imageSource, data.threshold);
-    self.postMessage({ id: data.id, result });
-  } catch (error) {
-    self.postMessage({ id: data.id, error: error?.message || "Vision detection failed." });
-  }
 };
