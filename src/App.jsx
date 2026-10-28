@@ -381,7 +381,7 @@ export default function App() {
         ocr: updatedText,
         label: updatedLabel,
         tags: combinedTags,
-      });
+      }); 
     }
 
     // Refresh cache and lists
