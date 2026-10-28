@@ -22,7 +22,7 @@ function runVisionTask(type, imageSource, threshold = 0.40) {
         visionWorker?.terminate();
         visionWorker = null;
         visionIdleTimer = null;
-      }, 20000);
+      }, visionIdleTimeout);
     }
   });
   visionQueue = task.catch(() => {});
@@ -43,23 +43,18 @@ export function getDetectedLabelsAndTags(imageSource, threshold = 0.40) {
  * Returns { box, score } where box = { x, y, width, height, angle }.
  */
 export async function detectPlateRegion(imageSource, minScore = 0.6) {
-  // The worker returns a payload with a `detections` array.
   const result = await runVisionTask("detectPlate", imageSource, minScore);
-  if (!result || !result.detections) return null;
-  const plateDetections = result.detections.filter((d) => /plate/i.test(d.label));
-  if (plateDetections.length === 0) return null;
-  const best = plateDetections.reduce((a, b) => (a.score > b.score ? a : b));
-  if (best.score < minScore) return null;
-  const { box } = best;
+  if (!result?.box || result.score < minScore) return null;
+  const { box } = result;
   return {
     box: {
-      x: box.xmin ?? 0,
-      y: box.ymin ?? 0,
-      width: (box.xmax ?? 0) - (box.xmin ?? 0),
-      height: (box.ymax ?? 0) - (box.ymin ?? 0),
+      x: (box.xmin ?? 0) / 100,
+      y: (box.ymin ?? 0) / 100,
+      width: ((box.xmax ?? 0) - (box.xmin ?? 0)) / 100,
+      height: ((box.ymax ?? 0) - (box.ymin ?? 0)) / 100,
       angle: 0, // YOLO‑tiny does not provide rotation.
     },
-    score: best.score,
+    score: result.score,
   };
 }
 
@@ -70,6 +65,11 @@ let visionIdleTimer = null;
 let visionRequestId = 0;
 let visionQueue = Promise.resolve();
 const visionRequests = new Map();
+const visionIdleTimeout = typeof navigator !== "undefined" &&
+  Number.isFinite(navigator.deviceMemory) &&
+  navigator.deviceMemory <= 4
+  ? 8000
+  : 15000;
 
 function getVisionWorker() {
   if (visionWorker) return visionWorker;
