@@ -2,7 +2,6 @@
 import { db } from "./db.js";
 import aliasMap from "./aliasMap.json";
 import { deriveTags } from "./tagger.js";
-import { parseIntentWithLLM } from "./llmService.js";
 import { isPureImageText } from "./ocr.js";
 
 const STOP_WORDS = new Set([
@@ -19,10 +18,6 @@ const CATEGORY_TAGS = new Set([
   "#vehicle", "#document", "#contact", "#travel", "#bill", "#health", "#finance",
   "#shopping", "#security", "#reminder", "#photo", "#image", "#picture",
 ]);
-const PHOTO_INTENT_TERMS = new Set([
-  "photo", "selfie", "picture", "pic", "portrait", "snap", "image", "gallery", "camera", "roll", "face", "capture", "captured",
-]);
-
 const TERM_SYNONYMS = {
   bike: ["bike", "motorcycle", "bicycle", "scooty", "scooter", "twowheeler"],
   bicycle: ["bicycle", "bike", "cycle"],
@@ -133,7 +128,6 @@ export function normalizeQuery(query) {
 
 let cachedEntries = [];
 let cacheLoaded = false;
-const imageObjectUrls = new Map();
 const imageThumbnailUrls = new Map();
 
 export function getImageThumbnailUrl(imageId, thumbnailBlob) {
@@ -147,38 +141,40 @@ export function getImageThumbnailUrl(imageId, thumbnailBlob) {
 
 export async function refreshCache() {
   const notes = await db.notes.toArray();
-  const images = await db.images.toArray();
-  const liveImageIds = new Set(images.map((image) => image.id));
-  for (const [id, url] of imageObjectUrls) {
-    if (!liveImageIds.has(id)) {
-      URL.revokeObjectURL(url);
-      imageObjectUrls.delete(id);
+  const images = [];
+  const liveImageIds = new Set();
+  await db.images.each((image) => {
+    liveImageIds.add(image.id);
+    const metadata = { ...image };
+    const thumbnailBlob = metadata.thumbnailBlob;
+    delete metadata.imageBlob;
+    delete metadata.blobUrl;
+    delete metadata.thumbnailBlob;
+    let thumbnailUrl;
+    if (thumbnailBlob instanceof Blob) {
+      thumbnailUrl = getImageThumbnailUrl(image.id, thumbnailBlob);
     }
-  }
+    images.push({ ...metadata, thumbnailUrl });
+  });
+
   for (const [id, url] of imageThumbnailUrls) {
     if (!liveImageIds.has(id)) {
       URL.revokeObjectURL(url);
       imageThumbnailUrls.delete(id);
     }
   }
-  const displayImages = images.map((image) => {
-    let blobUrl = image.blobUrl;
-    let thumbnailUrl;
-    if (image.imageBlob instanceof Blob) {
-      blobUrl = imageObjectUrls.get(image.id);
-      if (!blobUrl) {
-        blobUrl = URL.createObjectURL(image.imageBlob);
-        imageObjectUrls.set(image.id, blobUrl);
-      }
-    }
-    if (image.thumbnailBlob instanceof Blob) {
-      thumbnailUrl = getImageThumbnailUrl(image.id, image.thumbnailBlob);
-    }
-    return { ...image, blobUrl, thumbnailUrl };
-  });
-  cachedEntries = [...notes, ...displayImages];
+
+  cachedEntries = [...notes, ...images];
   cacheLoaded = true;
   return cachedEntries;
+}
+
+export async function getImageSource(imageId) {
+  const image = await db.images.get(imageId);
+  if (!image) throw new Error("Image was not found in storage.");
+  if (image.imageBlob instanceof Blob) return URL.createObjectURL(image.imageBlob);
+  if (typeof image.blobUrl === "string" && image.blobUrl.startsWith("data:")) return image.blobUrl;
+  throw new Error("Image data is unavailable.");
 }
 
 export function getCachedEntries() {
@@ -188,7 +184,7 @@ export function getCachedEntries() {
 /**
  * Scores an entry against query tokens with Priority Boosting for real images on visual queries.
  */
-function scoreEntry(entry, tokens, llmIntent = null) {
+function scoreEntry(entry, tokens) {
   let score = 0;
   const matchedTerms = new Set();
   const queryTerms = tokens.filter((token) => !token.startsWith("#"));
@@ -307,7 +303,7 @@ function scoreEntry(entry, tokens, llmIntent = null) {
   return score;
 }
 
-export async function rankedSearch(rawQuery, llmIntent = null) {
+export async function rankedSearch(rawQuery) {
   if (!cacheLoaded || cachedEntries.length === 0) {
     await refreshCache();
   }
@@ -324,7 +320,7 @@ export async function rankedSearch(rawQuery, llmIntent = null) {
   return cachedEntries
     .map((entry) => ({
       entry,
-      score: scoreEntry(entry, tokens, llmIntent),
+      score: scoreEntry(entry, tokens),
     }))
     .filter((item) => item.score > 0)
     .sort((a, b) => {
