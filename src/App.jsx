@@ -4,7 +4,11 @@ import { db, seedDemoData } from "./db.js";
 import { rankedSearch, fastSearch, refreshCache, getImageThumbnailUrl, getImageSource } from "./search.js";
 import { performOCR, recognizeVehiclePlate, isPureImageText } from "./ocr.js";
 import { deriveTags } from "./tagger.js";
-import { createImageThumbnail, getDetectedLabelsAndTags } from "./services/visionService.js";
+import {
+  createImageThumbnail,
+  getDetectedLabelsAndTags,
+  subscribeVisionModelStatus,
+} from "./services/visionService.js";
 import { createId } from "./id.js";
 
 export default function App() {
@@ -15,6 +19,11 @@ export default function App() {
   const [allEntries, setAllEntries] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [visionModelStatus, setVisionModelStatus] = useState({
+    state: "idle",
+    progress: null,
+    error: null,
+  });
   const [manualNote, setManualNote] = useState("");
   const [autoTags, setAutoTags] = useState([]);
 
@@ -159,7 +168,9 @@ export default function App() {
     void Promise.resolve()
       .then(loadEntries)
       .catch((err) => console.error("Failed to load memories:", err));
+    const unsubscribeVisionStatus = subscribeVisionModelStatus(setVisionModelStatus);
     return () => {
+      unsubscribeVisionStatus();
       if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);
     };
   }, [loadEntries]);
@@ -670,6 +681,31 @@ export default function App() {
           </p>
         </div>
                 <div className="flex items-center gap-2">
+          {visionModelStatus.state === "loading" && (
+            <span
+              className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-indigo-950/80 border border-indigo-700/50 text-indigo-300 animate-pulse"
+              role="status"
+              aria-live="polite"
+            >
+              {visionModelStatus.progress === null
+                ? "Loading vision model..."
+                : `Downloading vision model (${visionModelStatus.progress}%)`}
+            </span>
+          )}
+          {visionModelStatus.state === "ready" && (
+            <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-700/50 text-emerald-300">
+              Vision model ready
+            </span>
+          )}
+          {visionModelStatus.state === "error" && (
+            <span
+              className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-rose-950/80 border border-rose-700/50 text-rose-300"
+              title={visionModelStatus.error || "Vision model could not be loaded."}
+              role="status"
+            >
+              Vision model unavailable
+            </span>
+          )}
           <span className="text-[11px] font-mono tracking-wider uppercase px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-slate-400">
             Local-First
           </span>
