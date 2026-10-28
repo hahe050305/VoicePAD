@@ -669,22 +669,8 @@ export default function App() {
             Real-time
           </p>
         </div>
-                <div className="flex items-center gap-2">
-          {llmStatus.state === "loading" && !llmStatus.isCached && (
-            <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-indigo-950/80 border border-indigo-700/50 text-indigo-300 animate-pulse">
-              ⏳ Downloading AI ({llmStatus.progress}%)
-            </span>
-          )}
-          {llmStatus.state === "cached_loading" && (
-            <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-indigo-950/50 border border-indigo-800/40 text-indigo-300/80">
-              ⚡ Initializing...
-            </span>
-          )}
-          {llmStatus.state === "ready" && (
-            <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-700/50 text-emerald-300">
-              ⚡ Local AI Ready
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+          
           <span className="text-[11px] font-mono tracking-wider uppercase px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-slate-400">
             Local-First
           </span>
