@@ -602,7 +602,7 @@ export default function App() {
               className="text-slate-500 hover:text-slate-300 text-xs p-1"
               aria-label="Close reminder"
             >
-              âœ•
+              ×
             </button>
           </div>
         </div>
@@ -622,17 +622,17 @@ export default function App() {
                 <div className="flex items-center gap-2">
           {llmStatus.state === "loading" && !llmStatus.isCached && (
             <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-indigo-950/80 border border-indigo-700/50 text-indigo-300 animate-pulse">
-              ðŸ§  Downloading AI ({llmStatus.progress}%)
+              ⏳ Downloading AI ({llmStatus.progress}%)
             </span>
           )}
           {llmStatus.state === "cached_loading" && (
             <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-indigo-950/50 border border-indigo-800/40 text-indigo-300/80">
-              âš¡ Initializing...
+              ⚡ Initializing...
             </span>
           )}
           {llmStatus.state === "ready" && (
             <span className="text-[11px] font-mono tracking-wider px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-700/50 text-emerald-300">
-              âš¡ Local AI Ready
+              ⚡ Local AI Ready
             </span>
           )}
           <span className="text-[11px] font-mono tracking-wider uppercase px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-slate-400">
@@ -659,7 +659,7 @@ export default function App() {
                     title="Clear voice query"
                     aria-label="Clear voice query"
                   >
-                    âœ•
+                    ×
                   </button>
                 )}
               </div>
@@ -719,7 +719,7 @@ export default function App() {
     onClick={() => fileInputRef.current?.click()}
     className="flex-1 max-w-[170px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-medium border transition shadow-sm bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-slate-700 text-slate-200 active:scale-95"
   >
-    <span className="text-base">ðŸ“</span>
+    <span className="text-base"></span>
     <span>Upload Photos</span>
   </button>
         </div>
@@ -747,7 +747,6 @@ export default function App() {
                 }}
                 className="absolute right-20 text-slate-500 hover:text-slate-300 text-xs"
               >
-                âœ•
               </button>
             )}
             
@@ -890,7 +889,7 @@ export default function App() {
                               title={`${ocrExpandedId === entry.id ? "Hide" : "Show"} extracted text`}
                               className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
                             >
-                              ðŸ“· OCR {ocrExpandedId === entry.id ? "âŒƒ" : "âŒ„"}
+                              OCR {ocrExpandedId === entry.id ? "âŒƒ" : "âŒ„"}
                             </button>
                           ) : (
                             <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
@@ -899,7 +898,7 @@ export default function App() {
                           )}
                           {entry.label ? (
                             <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/40 text-indigo-300 flex items-center gap-1">
-                              ðŸ·ï¸ {entry.label}
+                              {entry.label}
                             </span>
                           ) : entry.type === "image" ? (
                             <button
@@ -907,7 +906,7 @@ export default function App() {
                               className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-600/40 text-amber-300 hover:bg-amber-900/90 transition flex items-center gap-1"
                               title="Click to add a label for instant search"
                             >
-                              ðŸ·ï¸ + Label
+                                  + Label
                             </button>
                           ) : null}
                         </div>
