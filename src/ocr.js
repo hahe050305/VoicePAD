@@ -254,7 +254,7 @@ async function _performOCR(file, onProgress) {
   return {
     text: displayText,
     rawText: recognizedText,
-    isPureImage: isPure,
+    isPureImage: isPureImageText(recognizedText),
     confidence,
     plate,
     plateOcrAttempted: plateRecognition.attempted,
