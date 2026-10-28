@@ -1,18 +1,18 @@
 export const HYPERLOCAL_COCO_TAGS = {
   // ── 1. Vehicles & Mobility ──
-  car: ["#vehicle", "#car", "#automobile", "#fourwheeler"],
-  truck: ["#vehicle", "#car", "#truck", "#suv", "#fourwheeler"],
+  car: ["#vehicle", "#car"],
+  truck: ["#vehicle", "#truck"],
   bus: ["#vehicle", "#bus", "#transport"],
-  motorcycle: ["#vehicle", "#bike", "#motorcycle", "#scooty", "#scooter", "#twowheeler"],
-  bicycle: ["#vehicle", "#cycle", "#bicycle", "#pedalcycle", "#twowheeler"],
+  motorcycle: ["#vehicle", "#motorcycle"],
+  bicycle: ["#vehicle", "#bicycle", "#cycle"],
   airplane: ["#travel", "#flight", "#airplane", "#plane"],
   boat: ["#travel", "#boat", "#ship"],
   train: ["#travel", "#train", "#railway"],
 
   // ── 2. Personal Accessories & Bags ──
   backpack: ["#bag", "#backpack", "#schoolbag", "#officebag"],
-  handbag: ["#bag", "#pouch", "#purse", "#handbag", "#clutch", "#wallet"],
-  suitcase: ["#bag", "#travel", "#luggage", "#suitcase", "#trolley", "#briefcase"],
+  handbag: ["#bag", "#handbag", "#purse"],
+  suitcase: ["#bag", "#travel", "#luggage", "#suitcase"],
   umbrella: ["#accessory", "#umbrella", "#rain"],
   tie: ["#accessory", "#clothes", "#formal"],
 
@@ -23,7 +23,7 @@ export const HYPERLOCAL_COCO_TAGS = {
   keyboard: ["#electronics", "#tech", "#keyboard", "#computer", "#typing"],
   mouse: ["#electronics", "#tech", "#mouse", "#computer"],
   remote: ["#electronics", "#remote", "#controller"],
-  clock: ["#time", "#clock", "#watch"],
+  clock: ["#time", "#clock"],
 
   // ── 4. Nature & Plants ──
   "potted plant": ["#plant", "#nature", "#flower", "#pot", "#garden", "#indoorplant"],
@@ -43,7 +43,7 @@ export const HYPERLOCAL_COCO_TAGS = {
   scissors: ["#stationery", "#tool", "#scissors"],
 
   // ── 7. People & Pets ──
-  person: ["#photo", "#person", "#selfie", "#people"],
+  person: ["#person", "#people"],
   cat: ["#pet", "#animal", "#cat", "#kitten"],
   dog: ["#pet", "#animal", "#dog", "#puppy"],
   bird: ["#animal", "#bird", "#nature"],
@@ -52,14 +52,14 @@ export const HYPERLOCAL_COCO_TAGS = {
   elephant: ["#animal", "#elephant"],
 
   // ── 8. Sports & Recreation ──
-  "sports ball": ["#sports", "#ball", "#cricket", "#football"],
+  "sports ball": ["#sports", "#ball"],
   skateboard: ["#sports", "#skateboard"],
-  "tennis racket": ["#sports", "#racket", "#badminton", "#tennis"],
+  "tennis racket": ["#sports", "#racket", "#tennis"],
 
   // ── 9. Food & Groceries ──
   banana: ["#food", "#fruit", "#grocery", "#banana"],
   apple: ["#food", "#fruit", "#grocery", "#apple"],
-  pizza: ["#food", "#meal", "#pizza", "#dinner"],
+  pizza: ["#food", "#pizza"],
   cake: ["#cake"],
 
   // ── 10. Posters & Graphics ──
