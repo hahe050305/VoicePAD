@@ -8,6 +8,7 @@ import { HYPERLOCAL_COCO_TAGS } from "../src/services/visionTags.js";
 
 let server;
 let deriveTags;
+let isPureImageText;
 
 before(async () => {
   server = await createServer({
@@ -18,6 +19,7 @@ before(async () => {
     logLevel: "silent",
   });
   ({ deriveTags } = await server.ssrLoadModule("/src/tagger.js"));
+  ({ isPureImageText } = await server.ssrLoadModule("/src/ocr.js"));
 });
 
 after(async () => {
@@ -38,6 +40,11 @@ test("corrects common OCR confusions and formats Bharat-series plates", () => {
 
 test("does not accept an invalid state code as a registration plate", () => {
   assert.equal(parsePlateString("ZZ 59 AX 2332"), null);
+});
+
+test("classifies OCR text and empty results without throwing", () => {
+  assert.equal(isPureImageText("Vehicle Plate: TN 59 AX 2332"), false);
+  assert.equal(isPureImageText(""), true);
 });
 
 test("prefers the two-letter series reading when OCR includes conflicting plate candidates", () => {
