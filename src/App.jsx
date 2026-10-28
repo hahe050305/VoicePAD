@@ -757,7 +757,7 @@ export default function App() {
     onClick={() => cameraInputRef.current?.click()}
     className="flex-1 max-w-[170px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold border transition shadow-sm bg-indigo-600 hover:bg-indigo-500 border-indigo-500/40 text-white active:scale-95"
   >
-    <span className="text-base"></span>
+    <span className="text-base select-none">📷</span>
     <span>Live Capture</span>
   </button>
   {/* 2. Gallery / File Upload */}
@@ -766,9 +766,60 @@ export default function App() {
     onClick={() => fileInputRef.current?.click()}
     className="flex-1 max-w-[170px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-medium border transition shadow-sm bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-slate-700 text-slate-200 active:scale-95"
   >
-    <span className="text-base"></span>
+    <span className="text-base select-none">🖼️</span>
     <span>Upload Photos</span>
   </button>
+        </div>
+
+        {/* Vision AI Model Status Bar */}
+        <div className="w-full max-w-md mt-2 mb-1 px-3.5 py-2 rounded-xl bg-slate-900/80 border border-slate-800 backdrop-blur text-xs flex items-center gap-2.5 transition-all">
+          {visionModelStatus.state === "loading" ? (
+            <>
+              <div className="w-3.5 h-3.5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between text-[11px] mb-1">
+                  <span className="text-indigo-300 font-medium">Loading Vision AI model...</span>
+                  <span className="font-mono text-slate-400">
+                    {visionModelStatus.progress != null ? `${visionModelStatus.progress}%` : "downloading..."}
+                  </span>
+                </div>
+                <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                  <div
+                    className="bg-indigo-500 h-full rounded-full transition-all duration-300"
+                    style={{ width: `${visionModelStatus.progress != null ? Math.max(5, visionModelStatus.progress) : 35}%` }}
+                  />
+                </div>
+              </div>
+            </>
+          ) : visionModelStatus.state === "ready" ? (
+            <div className="flex items-center justify-between w-full">
+              <div className="flex items-center gap-2">
+                <span className="flex h-2 w-2 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                <span className="text-[11px] font-medium text-emerald-400">Vision AI Model Loaded & Ready</span>
+              </div>
+              <span className="text-[10px] font-mono text-slate-400 bg-slate-800/80 px-2 py-0.5 rounded-md border border-slate-700/60">
+                ONNX / WebGPU
+              </span>
+            </div>
+          ) : visionModelStatus.state === "error" ? (
+            <div className="flex items-center gap-2 text-rose-400 text-[11px] w-full">
+              <span>⚠️</span>
+              <span className="truncate">Model load failed: {visionModelStatus.error || "Unknown error"}</span>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between w-full">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-slate-500"></span>
+                <span className="text-[11px] font-medium text-slate-400">Vision Model: Ready (On-Demand)</span>
+              </div>
+              <span className="text-[10px] font-mono text-slate-500 bg-slate-800/50 px-2 py-0.5 rounded-md border border-slate-800">
+                YOLO-tiny
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Search bar - manual text filter */}
@@ -816,30 +867,39 @@ export default function App() {
           <div className="flex gap-2">
             <input
               type="text"
-              placeholder="Write a note - tags are detected as you type"
+              placeholder="Write a note - tags are detected as you type (e.g. bike, meeting, wifi)"
               value={manualNote}
               onChange={handleNoteChange}
               className="flex-1 px-3 py-2 bg-slate-900/50 border border-slate-800/80 rounded-lg text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-slate-700"
             />
             <button
               type="submit"
-              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium border border-slate-700/80 transition whitespace-nowrap"
+              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium border border-slate-700/80 transition whitespace-nowrap flex items-center gap-1.5"
             >
-              + Save
+              <span>💾</span>
+              <span>Save</span>
             </button>
           </div>
-          {/* Live tag preview */}
-          {manualNote.trim() && autoTags.length > 0 && (
-            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-              <span className="text-[10px] text-slate-500">Auto-tags:</span>
-              {autoTags.map((tag) => (
-                <span
-                  key={tag}
-                  className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 font-medium"
-                >
-                  {tag}
+          {/* Live tag preview as user dynamically types */}
+          {manualNote.trim() && (
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap animate-in fade-in duration-150">
+              <span className="text-[10px] text-slate-500 flex items-center gap-1">
+                <span>🏷️</span> Auto-tags:
+              </span>
+              {autoTags.length > 0 ? (
+                autoTags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/90 text-indigo-300 border border-indigo-500/40 font-medium shadow-sm"
+                  >
+                    {tag}
+                  </span>
+                ))
+              ) : (
+                <span className="text-[10px] text-slate-500 italic">
+                  No matching tag yet (type e.g. #custom, car, meeting, pass, buy...)
                 </span>
-              ))}
+              )}
             </div>
           )}
         </form>
