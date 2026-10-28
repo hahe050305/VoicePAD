@@ -10,8 +10,13 @@ const LOW_MEMORY_DEVICE = typeof navigator !== "undefined" &&
   navigator.deviceMemory <= 4;
 const MAX_INFERENCE_DIMENSION = LOW_MEMORY_DEVICE ? 320 : 384;
 
+function publishModelStatus(status) {
+  self.postMessage({ type: "MODEL_STATUS", ...status });
+}
+
 async function getDetector() {
   if (!detectorPromise) {
+    publishModelStatus({ state: "loading", progress: null });
     detectorPromise = (async () => {
       const {
         AutoModelForObjectDetection,
@@ -26,24 +31,43 @@ async function getDetector() {
       const hasWebGPU = typeof navigator !== "undefined" && !!navigator.gpu;
       const device = hasWebGPU ? "webgpu" : "wasm";
       const dtype = hasWebGPU ? "fp32" : "q8";
+      const progress_callback = (progress) => {
+        if (progress.status === "progress_total") {
+          publishModelStatus({
+            state: "loading",
+            progress: Math.round(progress.progress),
+          });
+        }
+      };
       let model;
       let processor;
 
       try {
         [model, processor] = await Promise.all([
-          AutoModelForObjectDetection.from_pretrained(modelId, { device, dtype }),
+          AutoModelForObjectDetection.from_pretrained(modelId, {
+            device,
+            dtype,
+            progress_callback,
+          }),
           AutoProcessor.from_pretrained(modelId),
         ]);
       } catch (error) {
         console.warn("[Vision] WebGPU initialization failed; falling back to quantized WASM:", error);
         [model, processor] = await Promise.all([
-          AutoModelForObjectDetection.from_pretrained(modelId, { device: "wasm", dtype: "q8" }),
+          AutoModelForObjectDetection.from_pretrained(modelId, {
+            device: "wasm",
+            dtype: "q8",
+            progress_callback,
+          }),
           AutoProcessor.from_pretrained(modelId),
         ]);
       }
-      return new ObjectDetectionPipeline({ task: "object-detection", model, processor });
+      const pipeline = new ObjectDetectionPipeline({ task: "object-detection", model, processor });
+      publishModelStatus({ state: "ready", progress: 100 });
+      return pipeline;
     })().catch((error) => {
       detectorPromise = null;
+      publishModelStatus({ state: "error", error: error?.message || String(error) });
       throw error;
     });
   }

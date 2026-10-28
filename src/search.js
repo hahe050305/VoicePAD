@@ -317,18 +317,36 @@ export async function rankedSearch(rawQuery) {
     return [];
   }
 
-  return cachedEntries
-    .map((entry) => ({
-      entry,
-      score: scoreEntry(entry, tokens),
-    }))
-    .filter((item) => item.score > 0)
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return b.entry.timestamp - a.entry.timestamp;
-    })
-    .slice(0, 15)
-    .map((item) => ({ ...item.entry, _score: item.score }));
+  const topMatches = [];
+  const compareMatches = (a, b) =>
+    b.score !== a.score
+      ? b.score - a.score
+      : b.entry.timestamp - a.entry.timestamp;
+  let sliceStartedAt = performance.now();
+  for (let index = 0; index < cachedEntries.length; index++) {
+    const entry = cachedEntries[index];
+    const score = scoreEntry(entry, tokens);
+    if (score > 0) {
+      const match = { entry, score };
+      if (topMatches.length < 15) {
+        topMatches.push(match);
+        topMatches.sort(compareMatches);
+      } else if (compareMatches(match, topMatches[topMatches.length - 1]) < 0) {
+        topMatches[topMatches.length - 1] = match;
+        topMatches.sort(compareMatches);
+      }
+    }
+
+    if (
+      index + 1 < cachedEntries.length &&
+      performance.now() - sliceStartedAt >= 8
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      sliceStartedAt = performance.now();
+    }
+  }
+
+  return topMatches.map((item) => ({ ...item.entry, _score: item.score }));
 }
 
 export async function fastSearch(rawQuery, onProgressHit = null) {

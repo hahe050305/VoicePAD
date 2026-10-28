@@ -2,6 +2,20 @@
 import { HYPERLOCAL_COCO_TAGS } from "./visionTags.js";
 export { HYPERLOCAL_COCO_TAGS };
 
+let visionModelStatus = { state: "idle", progress: null, error: null };
+const visionStatusListeners = new Set();
+
+export function subscribeVisionModelStatus(callback) {
+  visionStatusListeners.add(callback);
+  callback(visionModelStatus);
+  return () => visionStatusListeners.delete(callback);
+}
+
+function updateVisionModelStatus(status) {
+  visionModelStatus = { ...visionModelStatus, ...status };
+  visionStatusListeners.forEach((listener) => listener(visionModelStatus));
+}
+
 /** Run a task on the shared vision WebWorker. */
 function runVisionTask(type, imageSource, threshold = 0.40) {
   const task = visionQueue.then(async () => {
@@ -22,6 +36,7 @@ function runVisionTask(type, imageSource, threshold = 0.40) {
         visionWorker?.terminate();
         visionWorker = null;
         visionIdleTimer = null;
+        updateVisionModelStatus({ state: "idle", progress: null, error: null });
       }, visionIdleTimeout);
     }
   });
@@ -77,6 +92,14 @@ function getVisionWorker() {
     type: "module",
   });
   visionWorker.onmessage = ({ data }) => {
+    if (data.type === "MODEL_STATUS") {
+      updateVisionModelStatus({
+        state: data.state,
+        progress: data.progress ?? null,
+        error: data.error ?? null,
+      });
+      return;
+    }
     const request = visionRequests.get(data.id);
     if (!request) return;
     visionRequests.delete(data.id);
@@ -85,6 +108,7 @@ function getVisionWorker() {
   };
   const rejectPending = (event) => {
     const error = new Error(event.message || "Vision worker failed.");
+    updateVisionModelStatus({ state: "error", progress: null, error: error.message });
     for (const request of visionRequests.values()) request.reject(error);
     visionRequests.clear();
     visionWorker?.terminate();
