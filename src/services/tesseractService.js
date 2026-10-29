@@ -1,3 +1,4 @@
+// src/services/tesseractService.js
 import { createWorker } from "tesseract.js";
 import { createOcrVariants } from "./ocrPreprocessService.js";
 import { scoreOcrResult } from "./ocrRanking.js";
@@ -10,8 +11,8 @@ let queue = Promise.resolve();
 const idleTimeout = typeof navigator !== "undefined" &&
   Number.isFinite(navigator.deviceMemory) &&
   navigator.deviceMemory <= 4
-  ? 10000
-  : 20000;
+  ? 30000
+  : 60000;
 
 function resetIdleTimer(worker) {
   if (idleTimer) clearTimeout(idleTimer);
@@ -27,7 +28,7 @@ function resetIdleTimer(worker) {
   }, idleTimeout);
 }
 
-async function getWorker() {
+export async function getTesseractWorker() {
   if (!workerPromise) {
     workerPromise = createWorker("eng", 1, {
       logger: (message) => {
@@ -43,6 +44,17 @@ async function getWorker() {
   return workerPromise;
 }
 
+/** Pre-warm Tesseract worker without blocking or allocating excessive memory */
+export function prewarmOCR() {
+  if (typeof window === "undefined") return;
+  // Delay slightly so initial page render and IndexedDB load are completely finished
+  setTimeout(() => {
+    getTesseractWorker().catch((err) => {
+      console.warn("[OCR] Pre-warming skipped:", err);
+    });
+  }, 1200);
+}
+
 /** Serialize requests because Tesseract's whitelist and page mode are worker-wide settings. */
 export function recognizeWithTesseract(image, {
   plate = false,
@@ -52,7 +64,7 @@ export function recognizeWithTesseract(image, {
   const task = queue.then(async () => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = null;
-    const worker = await getWorker();
+    const worker = await getTesseractWorker();
     activeProgress = onProgress;
     try {
       await worker.setParameters({

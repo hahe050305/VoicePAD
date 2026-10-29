@@ -1,4 +1,4 @@
-﻿// src/App.jsx
+// src/App.jsx
 import { useEffect, useState, useRef, useCallback } from "react";
 import { db, seedDemoData } from "./db.js";
 import { rankedSearch, fastSearch, refreshCache, getImageThumbnailUrl, getImageSource } from "./search.js";
@@ -8,7 +8,9 @@ import {
   createImageThumbnail,
   getDetectedLabelsAndTags,
   subscribeVisionModelStatus,
+  prewarmVisionModel,
 } from "./services/visionService.js";
+import { prewarmOCR } from "./services/tesseractService.js";
 import { createId } from "./id.js";
 
 export default function App() {
@@ -33,7 +35,7 @@ export default function App() {
   const [editLabel, setEditLabel] = useState("");
   const [editingError, setEditingError] = useState("");
 
-  // Zoom modal state â€” entry selected by clicking a card
+  // Zoom modal state — entry selected by clicking a card
   const [selectedEntry, setSelectedEntry] = useState(null);
   const [selectedImage, setSelectedImage] = useState(null);
   const [ocrExpandedId, setOcrExpandedId] = useState(null);
@@ -105,7 +107,6 @@ export default function App() {
   const imageProcessingQueueRef = useRef(Promise.resolve());
   const thumbnailJobsRef = useRef(new Set());
 
-  //const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
 
   const enqueueThumbnailBackfill = useCallback((entries) => {
@@ -169,6 +170,11 @@ export default function App() {
       .then(loadEntries)
       .catch((err) => console.error("Failed to load memories:", err));
     const unsubscribeVisionStatus = subscribeVisionModelStatus(setVisionModelStatus);
+
+    // Prior prewarming: silently warms up OCR and YOLO in background without blocking UI
+    prewarmVisionModel();
+    prewarmOCR();
+
     return () => {
       unsubscribeVisionStatus();
       if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);
@@ -179,7 +185,7 @@ export default function App() {
     enqueueThumbnailBackfill(filteredEntries);
   }, [filteredEntries, enqueueThumbnailBackfill]);
 
-  // â”€â”€ Voice recognition â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Voice recognition ────────────────────────────────────────────────────────
   useEffect(() => {
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -204,7 +210,6 @@ export default function App() {
     };
 
     recognizer.onresult = (e) => {
-      // 1. Immediately extract latest spoken words (interim + final)
       let currentTranscript = "";
       for (let i = 0; i < e.results.length; i++) {
         currentTranscript += e.results[i][0].transcript + " ";
@@ -213,11 +218,9 @@ export default function App() {
 
       if (!currentTranscript) return;
 
-      // 2. Zero-latency instant visual reflection in the Instagram Notes floater bubble
       setVoiceTranscript(currentTranscript);
       setSearchMode("voice");
 
-      // 3. Debounce background search so fast ongoing speaking does not thrash, but search begins instantly
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
       setIsSearching(true);
 
@@ -260,13 +263,11 @@ export default function App() {
         // Ignore if already stopped
       }
     } else {
-      // Immediate optimistic visual feedback (<1ms)
       setIsListening(true);
       setVoiceTranscript("");
       try {
         recognizerRef.current.start();
       } catch {
-        // If already starting or in an invalid state, abort and restart cleanly
         try {
           recognizerRef.current.abort();
           recognizerRef.current.start();
@@ -283,7 +284,7 @@ export default function App() {
     setFilteredEntries(allEntries.slice(0, 20));
   };
 
-  // â”€â”€ Live feed filtering for manual text search (debounced) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Live feed filtering for manual text search (debounced) ───────────────────
   const handleLiveFilter = useCallback(
     (q) => {
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
@@ -327,7 +328,7 @@ export default function App() {
     }
   };
 
-  // â”€â”€ Quick note with semantic auto-tagging â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Quick note with semantic auto-tagging ───────────────────────────────────
   const handleNoteChange = (e) => {
     const val = e.target.value;
     setManualNote(val);
@@ -361,7 +362,7 @@ export default function App() {
     }
   };
 
-  // â”€â”€ In-card editing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── In-card editing ─────────────────────────────────────────────────────────
   const startEditing = (entry, e) => {
     if (e) e.stopPropagation();
     setEditingId(entry.id);
@@ -412,7 +413,6 @@ export default function App() {
       }); 
     }
 
-    // Refresh cache and lists
     const updated = await refreshCache();
     const sorted = [...updated].sort((a, b) => b.timestamp - a.timestamp);
     setAllEntries(sorted);
@@ -429,7 +429,7 @@ export default function App() {
     setEditLabel("");
   };
 
-  // â”€â”€ Image Capture / OCR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Image Capture / Vision & OCR Pipeline ────────────────────────────────────
   const extractTagsFromText = (text) => {
     if (!text || !text.trim()) return ["#image", "#photo"];
     const tags = deriveTags(text);
@@ -439,27 +439,23 @@ export default function App() {
   const handleImageCapture = async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
-    // Clear immediately so the same selection can be added again while this
-    // batch is being indexed in the background.
+
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (cameraInputRef.current) cameraInputRef.current.value = "";
 
     try {
-      // Store the selected files as Blobs; this avoids creating and retaining
-      // base64 copies of every selected image in memory.
       const newEntries = files.map((file, i) => ({
         id: createId(),
         type: "image",
         imageBlob: file,
         label: "",
         ocr: "",
-        isPureImage: true, // Default so it renders instantly as a photo placeholder
+        isPureImage: true,
         tags: ["#image", "#photo"],
         timestamp: Date.now() + i,
       }));
       newEntries.forEach((entry) => thumbnailJobsRef.current.add(entry.id));
 
-      // Immediately store to database and update UI
       await db.images.bulkAdd(newEntries);
       files.length = 0;
       newEntries.forEach((entry) => {
@@ -470,13 +466,12 @@ export default function App() {
       setAllEntries(sorted);
       setFilteredEntries(sorted.slice(0, 20));
 
-      // Trigger top-right reminder popup on every unlabelled image after a few seconds
       if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);
       reminderTimerRef.current = setTimeout(() => {
         setShowLabelReminder(true);
       }, 2500);
 
-      // Run OCR pipeline silently in the background without blocking the UI
+      // Run Vision & OCR pipeline silently in the background
       const processingTask = imageProcessingQueueRef.current.then(async () => {
         for (let i = 0; i < newEntries.length; i++) {
           const entry = newEntries[i];
@@ -502,49 +497,47 @@ export default function App() {
             setFilteredEntries((current) => current.map(updatePreview));
             setSelectedEntry((current) => current?.id === entry.id ? updatePreview(current) : current);
 
-            // Run OCR first, then detect objects.
-            // Yield between images so rendering/input can run during batch processing.
             await new Promise((resolve) => setTimeout(resolve, 0));
-            const ocrResult = await performOCR(file).catch((err) => {
-              console.warn("[Vision] OCR error:", err);
-              return "";
-            });
+
+            // Run object detection & OCR concurrently for maximum throughput
+            const [visionResultRaw, ocrResultRaw] = await Promise.all([
+              getDetectedLabelsAndTags(file).catch((err) => {
+                console.warn("[Vision] Vision detection error:", err);
+                return { labels: [], tags: [], detections: [] };
+              }),
+              performOCR(file).catch((err) => {
+                console.warn("[Vision] OCR error:", err);
+                return "";
+              }),
+            ]);
+
+            const visionResult = visionResultRaw || { labels: [], tags: [], detections: [] };
+            const ocrResult = ocrResultRaw || "";
 
             let extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
             let activePlate = typeof ocrResult === "object" && ocrResult?.plate ? ocrResult.plate : null;
-            const plateOcrAttempted = typeof ocrResult === "object" && ocrResult?.plateOcrAttempted;
             const structuredIds = typeof ocrResult === "object" && Array.isArray(ocrResult?.structuredIds) ? ocrResult.structuredIds : [];
             let cleanText = extractedText.trim();
-            const validWords = cleanText
-              .replace(/[^a-zA-Z\s]/g, " ")
-              .split(/\s+/)
-              .filter((word) => word.length >= 3);
 
-            const hasStructuredId = structuredIds.length > 0;
-            const isTextDominant = !!activePlate || hasStructuredId || validWords.length >= 2;
+            const isVehicleImage = (visionResult.labels || []).some((label) =>
+              ["car", "motorcycle", "truck", "bus"].includes(label)
+            );
 
-            let visionResult = { labels: [], tags: [], detections: [] };
-            if (!isTextDominant) {
-              visionResult = await getDetectedLabelsAndTags(file).catch((err) => {
-                console.warn("[Vision] Vision detection error:", err);
-                return { labels: [], tags: [], detections: [] };
+            // If a vehicle was actually detected by YOLO and no plate was found yet, attempt plate-focused OCR
+            if (!activePlate && isVehicleImage) {
+              const plateResult = await recognizeVehiclePlate(file).catch((err) => {
+                console.warn("[Vision] Plate-focused OCR error:", err);
+                return null;
               });
-              const isVehicleImage = (visionResult.labels || []).some((label) =>
-                ["car", "motorcycle", "truck", "bus"].includes(label)
-              );
-              if (!activePlate && isVehicleImage && !plateOcrAttempted) {
-                const plateResult = await recognizeVehiclePlate(file).catch((err) => {
-                  console.warn("[Vision] Plate-focused OCR error:", err);
-                  return null;
-                });
-                if (plateResult?.plate) {
-                  activePlate = plateResult.plate;
-                  extractedText = `Vehicle Plate: ${activePlate}`;
-                  cleanText = `${extractedText}\n${cleanText}`.trim();
-                }
+              if (plateResult?.plate) {
+                activePlate = plateResult.plate;
+                extractedText = `Vehicle Plate: ${activePlate}`;
+                cleanText = `${extractedText}\n${cleanText}`.trim();
               }
             }
+
             const hasVehiclePlate = !!activePlate;
+            const hasStructuredId = structuredIds.length > 0;
 
             const isValidTag = (tag) => {
               const clean = tag.replace("#", "").toLowerCase();
@@ -553,15 +546,16 @@ export default function App() {
             };
 
             const textTags = cleanText ? deriveTags(cleanText) : [];
-            const activeVisionTags = isTextDominant ? [] : (visionResult.tags || []);
+            const activeVisionTags = visionResult.tags || [];
             const idTags = structuredIds.map((id) => `#${id.value.toLowerCase()}`);
+
             const rawCombinedTags = [
               ...textTags,
               ...activeVisionTags,
               ...idTags,
               ...(hasVehiclePlate ? ["#vehicle", `#${activePlate.replace(/\s+/g, "").toLowerCase()}`] : []),
               ...(hasStructuredId ? ["#document"] : []),
-              ...(!isTextDominant ? ["#photo"] : []),
+              ...(activeVisionTags.length > 0 || !cleanText ? ["#photo"] : []),
             ];
             const combinedTags = Array.from(new Set(rawCombinedTags.filter(isValidTag)));
             const finalOcrText = activePlate && !cleanText.includes(activePlate)
@@ -570,8 +564,8 @@ export default function App() {
 
             await db.images.update(entry.id, {
               ocr: finalOcrText,
-              isPureImage: !hasVehiclePlate && !hasStructuredId && !isTextDominant && finalOcrText.length === 0,
-              detectedObjects: isTextDominant ? [] : visionResult.labels,
+              isPureImage: !hasVehiclePlate && !hasStructuredId && finalOcrText.length === 0,
+              detectedObjects: visionResult.labels || [],
               tags: combinedTags,
             });
           } catch (err) {
@@ -581,7 +575,6 @@ export default function App() {
           }
         }
 
-        // Re-sync UI so new tags appear on the cards immediately
         const refreshed = await refreshCache();
         const refreshedSorted = [...refreshed].sort((a, b) => b.timestamp - a.timestamp);
         setAllEntries(refreshedSorted);
@@ -601,9 +594,9 @@ export default function App() {
       alert("Error adding images. Please try again.");
     }
   };
+
   const handleDeleteEntry = async (entry, e) => {
     if (e) e.stopPropagation();
-    // if (!window.confirm("Delete this memory?")) return;
 
     if (entry.type === "image") await db.images.delete(entry.id);
     else await db.notes.delete(entry.id);
@@ -622,7 +615,7 @@ export default function App() {
   const formatTime = (ts) =>
     new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-  // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center px-4 py-8 antialiased selection:bg-indigo-500 selection:text-white">
       {/* Top-Right Notification: Appears on every unlabelled image upload after a few seconds */}
@@ -680,8 +673,7 @@ export default function App() {
             Real-time
           </p>
         </div>
-          <div className="flex items-center gap-2">
-          
+        <div className="flex items-center gap-2">
           <span className="text-[11px] font-mono tracking-wider uppercase px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-slate-400">
             Local-First
           </span>
@@ -691,7 +683,6 @@ export default function App() {
       <main className="w-full max-w-xl flex flex-col items-center">
         {/* Voice Orb with Instagram Notes-inspired Floater Bubble */}
         <div className="relative my-6 flex flex-col items-center">
-          {/* Instagram Notes Floater Bubble (Top-Right of Mic) */}
           {(voiceTranscript || isListening) && (
             <div className="absolute -top-10 -right-8 z-20 flex flex-col items-start max-w-[210px] animate-in fade-in zoom-in-95 duration-200">
               <div className="relative px-3 py-1.5 bg-indigo-600 text-white rounded-2xl rounded-bl-sm shadow-xl border border-indigo-400/40 flex items-center gap-1.5 backdrop-blur-md">
@@ -710,7 +701,6 @@ export default function App() {
                   </button>
                 )}
               </div>
-              {/* Instagram Notes speech bubble pointer dot */}
               <div className="w-2 h-2 bg-indigo-600 rounded-full ml-2 -mt-0.5 border border-indigo-400/30" />
             </div>
           )}
@@ -734,41 +724,40 @@ export default function App() {
           </button>
         </div>
 
-        {/* Image capture - gallery supports selecting multiple images */}
+        {/* Image capture - live camera & photo gallery */}
         <div className="w-full flex items-center justify-center gap-3 my-2">
           <input
-    ref={fileInputRef}
-    type="file"
-    accept="image/*"
-    multiple
-    className="hidden"
-    onChange={handleImageCapture}
-  />
-  <input
-    ref={cameraInputRef}
-    type="file"
-    accept="image/*"
-    capture="environment"
-    className="hidden"
-    onChange={handleImageCapture}
-  />
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={handleImageCapture}
+          />
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={handleImageCapture}
+          />
           <button
-    type="button"
-    onClick={() => cameraInputRef.current?.click()}
-    className="flex-1 max-w-[170px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold border transition shadow-sm bg-indigo-600 hover:bg-indigo-500 border-indigo-500/40 text-white active:scale-95"
-  >
-    <span className="text-base select-none">📷</span>
-    <span>Live Capture</span>
-  </button>
-  {/* 2. Gallery / File Upload */}
-  <button
-    type="button"
-    onClick={() => fileInputRef.current?.click()}
-    className="flex-1 max-w-[170px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-medium border transition shadow-sm bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-slate-700 text-slate-200 active:scale-95"
-  >
-    <span className="text-base select-none">🖼️</span>
-    <span>Upload Photos</span>
-  </button>
+            type="button"
+            onClick={() => cameraInputRef.current?.click()}
+            className="flex-1 max-w-[170px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold border transition shadow-sm bg-indigo-600 hover:bg-indigo-500 border-indigo-500/40 text-white active:scale-95"
+          >
+            <span className="text-base select-none">📷</span>
+            <span>Live Capture</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="flex-1 max-w-[170px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-medium border transition shadow-sm bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-slate-700 text-slate-200 active:scale-95"
+          >
+            <span className="text-base select-none">🖼️</span>
+            <span>Upload Photos</span>
+          </button>
         </div>
 
         {/* Vision AI Model Status Bar */}
@@ -813,7 +802,7 @@ export default function App() {
             <div className="flex items-center justify-between w-full">
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-slate-500"></span>
-                <span className="text-[11px] font-medium text-slate-400">Vision Model: Ready (On-Demand)</span>
+                <span className="text-[11px] font-medium text-slate-400">Vision Model: Ready (Pre-Warmed)</span>
               </div>
               <span className="text-[10px] font-mono text-slate-500 bg-slate-800/50 px-2 py-0.5 rounded-md border border-slate-800">
                 YOLO-tiny
@@ -848,9 +837,7 @@ export default function App() {
               >
               </button>
             )}
-            
           </div>
-          {/* Show active filter indicator for manual text */}
           {query.trim() && searchMode === "text" && (
             <p className="text-[11px] text-slate-500 mt-1.5 ml-1">
               Showing{" "}
@@ -880,7 +867,6 @@ export default function App() {
               <span>Save</span>
             </button>
           </div>
-          {/* Live tag preview as user dynamically types */}
           {manualNote.trim() && (
             <div className="flex items-center gap-1.5 mt-2 flex-wrap animate-in fade-in duration-150">
               <span className="text-[10px] text-slate-500 flex items-center gap-1">
@@ -998,7 +984,7 @@ export default function App() {
                               title={`${ocrExpandedId === entry.id ? "Hide" : "Show"} extracted text`}
                               className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
                             >
-                              OCR {ocrExpandedId === entry.id ? "âŒƒ" : "âŒ„"}
+                              OCR {ocrExpandedId === entry.id ? "▲" : "▼"}
                             </button>
                           ) : (
                             <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
@@ -1015,7 +1001,7 @@ export default function App() {
                               className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-600/40 text-amber-300 hover:bg-amber-900/90 transition flex items-center gap-1"
                               title="Click to add a label for instant search"
                             >
-                                  + Label
+                              + Label
                             </button>
                           ) : null}
                         </div>
@@ -1051,7 +1037,6 @@ export default function App() {
                                   : "Edit memory content..."
                               }
                             />
-                            {/* Live preview of auto-tags while editing */}
                             {(editText.trim() || editLabel.trim()) && (
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <span className="text-[10px] text-slate-500">
@@ -1114,10 +1099,7 @@ export default function App() {
                               </p>
                             )}
                             <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                              {(entry.tags?.some((t) => !["#image", "#photo", "#picture", "#scooty", "#scooter", "#twowheeler", "#fourwheeler", "#automobile"].includes(t))
-                                ? entry.tags.filter((t) => !["#image", "#photo", "#picture", "#scooty", "#scooter", "#twowheeler", "#fourwheeler", "#automobile"].includes(t))
-                                : entry.tags?.filter((t) => t !== "#image")
-                              )?.map((tag) => (
+                              {entry.tags?.map((tag) => (
                                 <span
                                   key={tag}
                                   className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 font-medium"
@@ -1128,7 +1110,6 @@ export default function App() {
                             </div>
                           </div>
                         ) : (
-                          /* Standard Text or OCR Document */
                           <>
                             <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
                               {entry.type === "text"
@@ -1136,10 +1117,7 @@ export default function App() {
                                 : entry.ocr || "(No readable text in image)"}
                             </p>
                             <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                              {(entry.tags?.some((t) => !["#image", "#photo", "#picture", "#scooty", "#scooter", "#twowheeler", "#fourwheeler", "#automobile"].includes(t))
-                                ? entry.tags.filter((t) => !["#image", "#photo", "#picture", "#scooty", "#scooter", "#twowheeler", "#fourwheeler", "#automobile"].includes(t))
-                                : entry.tags?.filter((t) => t !== "#image")
-                              )?.map((tag) => (
+                              {entry.tags?.map((tag) => (
                                 <span
                                   key={tag}
                                   className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 font-medium"
@@ -1152,7 +1130,6 @@ export default function App() {
                         )}
                       </div>
 
-                      {/* Right Action Icons (Edit, Delete, Timestamp) */}
                       {!isEditing && (
                         <div className="flex flex-col items-end gap-1.5 shrink-0">
                           <span className="text-[10px] text-slate-500 font-mono">
@@ -1193,13 +1170,7 @@ export default function App() {
         const modalPure =
           modalEntry.type === "image" &&
           (modalEntry.isPureImage === true || (!modalEntry.ocr && !modalEntry.label) || isPureImageText(modalEntry.ocr));
-        const modalTags = modalEntry.tags?.some((tag) =>
-          !["#image", "#photo", "#picture", "#scooty", "#scooter", "#twowheeler", "#fourwheeler", "#automobile"].includes(tag)
-        )
-          ? modalEntry.tags.filter((tag) =>
-              !["#image", "#photo", "#picture", "#scooty", "#scooter", "#twowheeler", "#fourwheeler", "#automobile"].includes(tag)
-            )
-          : modalEntry.tags?.filter((tag) => tag !== "#image");
+        const modalTags = modalEntry.tags || [];
 
         return (
           <div

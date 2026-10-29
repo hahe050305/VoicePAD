@@ -3,13 +3,11 @@ import { HYPERLOCAL_COCO_TAGS } from "../services/visionTags.js";
 let detectorPromise = null;
 const INCIDENTAL_PROPS = new Set([
   "chair", "dining table", "cup", "bottle", "bowl", "fork", "knife", "spoon",
-  "mouse", "keyboard", "remote", "bench", "vase", "potted plant", "fire hydrant", "traffic light",
+  "mouse", "remote", "bench", "vase", "potted plant", "fire hydrant", "traffic light",
 ]);
 const LOW_MEMORY_DEVICE = typeof navigator !== "undefined" &&
   Number.isFinite(navigator.deviceMemory) &&
   navigator.deviceMemory <= 4;
-// Increase inference dimension slightly (from 320/384 to 480/512) so partial objects,
-// keyboards, laptops, and dark bags are not crushed into unrecognizable pixel clusters.
 const MAX_INFERENCE_DIMENSION = LOW_MEMORY_DEVICE ? 448 : 512;
 
 function publishModelStatus(status) {
@@ -101,7 +99,7 @@ async function makeInferenceUrl(imageSource) {
       const imgData = context.getImageData(0, 0, width, height);
       const data = imgData.data;
       let totalLuminance = 0;
-      const step = Math.max(1, Math.floor(data.length / 4000)); // Sample ~1000 pixels
+      const step = Math.max(1, Math.floor(data.length / 4000));
       let samples = 0;
       for (let i = 0; i < data.length; i += 4 * step) {
         totalLuminance += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
@@ -109,7 +107,7 @@ async function makeInferenceUrl(imageSource) {
       }
       const avgLuminance = samples > 0 ? totalLuminance / samples : 128;
 
-      // If scene is underexposed/dark (avg luminance < 80), boost contrast & gamma
+      // If scene is underexposed/dark (avg luminance < 85), boost contrast & gamma
       if (avgLuminance < 85) {
         const factor = Math.min(2.0, (95 / Math.max(25, avgLuminance)));
         for (let i = 0; i < data.length; i += 4) {
@@ -120,7 +118,7 @@ async function makeInferenceUrl(imageSource) {
         context.putImageData(imgData, 0, 0);
       }
     } catch {
-      // If getImageData fails due to any browser constraint, proceed with resized canvas
+      // Proceed if browser security blocks pixel access
     }
 
     const resized = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.90 });
@@ -155,8 +153,7 @@ async function detect(imageSource, threshold) {
   const detector = await getDetector();
   const url = await makeInferenceUrl(imageSource);
   try {
-    // For partial objects or difficult lighting, use a lower raw detection threshold (e.g., 0.20 - 0.25)
-    const effectiveThreshold = typeof threshold === "number" ? Math.min(threshold, 0.28) : 0.28;
+    const effectiveThreshold = typeof threshold === "number" ? Math.min(threshold, 0.25) : 0.25;
     const raw = await detector(url, { threshold: effectiveThreshold, percentage: true });
     const detections = (raw || []).map((item) => ({
       label: item.label.toLowerCase(),
@@ -164,14 +161,13 @@ async function detect(imageSource, threshold) {
       box: item.box,
     }));
 
-    // Allow partial objects (e.g. partial laptop corner, cropped backpack)
     const salient = detections.filter((item) => {
       const width = Math.max(0, (item.box?.xmax ?? 0) - (item.box?.xmin ?? 0));
       const height = Math.max(0, (item.box?.ymax ?? 0) - (item.box?.ymin ?? 0));
       const area = (width * height) / 10000;
-      // High-interest items like laptop, backpack, handbag, motorcycle, cell phone get lower area threshold
-      const isHighInterest = ["laptop", "backpack", "handbag", "suitcase", "cell phone", "motorcycle", "bicycle", "car"].includes(item.label);
-      if (isHighInterest) return area >= 0.001 && item.score >= 0.22;
+      // High-interest items: laptop, keyboard, backpack, handbag, cell phone
+      const isHighInterest = ["laptop", "keyboard", "backpack", "handbag", "suitcase", "cell phone", "motorcycle", "bicycle", "car"].includes(item.label);
+      if (isHighInterest) return area >= 0.001 && item.score >= 0.20;
       return INCIDENTAL_PROPS.has(item.label) ? area >= 0.015 && item.score >= 0.35 : area >= 0.003 && item.score >= 0.25;
     });
 
@@ -191,7 +187,10 @@ async function detect(imageSource, threshold) {
 self.onmessage = async ({ data }) => {
   try {
     let result;
-    if (data.type === "detectPlate") {
+    if (data.type === "warmup") {
+      await getDetector();
+      result = { warmed: true };
+    } else if (data.type === "detectPlate") {
       const detections = await detect(data.imageSource, data.threshold);
       const plates = detections.detections.filter((d) => /plate/i.test(d.label));
       const best = plates.reduce((current, candidate) =>

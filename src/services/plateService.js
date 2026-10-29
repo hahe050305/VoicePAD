@@ -6,7 +6,15 @@ const VALID_INDIAN_STATES = new Set([
   "OD", "PB", "PY", "RJ", "SK", "TN", "TR", "TS", "UK", "UP", "WB"
 ]);
 
-const BH_PLATE_PATTERN = /\d{2}BH\d{4}[A-Z]{1,2}/;
+// Negative keywords that frequently appear in movie tickets, bills, documents, or apps
+// that should never be parsed as vehicle plates
+const NON_VEHICLE_KEYWORDS = [
+  "BOOKMYSHOW", "CINEMA", "TICKET", "SCREEN", "SEAT", "AUDI", "SHOW",
+  "INVOICE", "ORDER", "PAYMENT", "TRANSACTION", "RECEIPT", "BILL", "REFUND",
+  "FLIPKART", "AMAZON", "SWIGGY", "ZOMATO", "COUPON", "VOUCHER", "VALID", "EXPIRES"
+];
+
+const BH_PLATE_PATTERN = /\b\d{2}\s*BH\s*\d{4}\s*[A-Z]{1,2}\b/;
 const STATE_OCR_ALTERNATIVES = {
   "0": ["O"],
   "1": ["I", "L"],
@@ -18,12 +26,6 @@ const STATE_OCR_ALTERNATIVES = {
 const OCR_TO_DIGIT = { O: "0", Q: "0", D: "0", I: "1", L: "1", Z: "2", S: "5", G: "6", B: "8" };
 const OCR_TO_LETTER = { "0": "O", "1": "I", "2": "Z", "5": "S", "6": "G", "8": "B" };
 
-// In Indian High Security Registration Plates (HSRP), the German DIN 1451-based font has
-// distinctive character geometry that OCR engines frequently misread:
-// - '6' has a rounded top loop that OCR easily mistakes for 'B' or '8'
-// - '4' has an open or angled stroke that OCR frequently misreads as 'L' or 'A'
-// - '0' is misread as 'D', 'O', or 'Q'
-// - '1' is misread as 'I' or 'L'
 const DIGIT_ALTERNATIVES = {
   B: ["6", "8"],
   L: ["4", "1"],
@@ -41,14 +43,12 @@ export function formatPlate(value) {
   if (!value) return "";
   const upper = value.toUpperCase().replace(/[^A-Z0-9]/g, "");
 
-  // Bharat Series: e.g. 22BH6517A -> 22 BH 6517 A
-  const bhMatch = upper.match(BH_PLATE_PATTERN);
+  const bhMatch = upper.match(/\d{2}BH\d{4}[A-Z]{1,2}/);
   if (bhMatch) {
     const val = bhMatch[0];
     return `${val.slice(0, 2)} BH ${val.slice(4, 8)} ${val.slice(8)}`;
   }
 
-  // Standard Indian Plate: e.g. TN59AX2332 -> TN 59 AX 2332
   const state = upper.slice(0, 2);
   const districtMatch = upper.slice(2).match(/^\d{1,2}/);
   const district = districtMatch ? districtMatch[0] : "";
@@ -95,21 +95,29 @@ function expandDigitSequences(rawString) {
   return results.filter((s) => /^\d+$/.test(s));
 }
 
-function findStandardPlate(compact, rawStr = "") {
-  // If the raw text is very short or doesn't have at least some digit-like characters, reject to avoid hallucinations on noise
-  const digitCount = (compact.match(/\d/g) || []).length;
-  const letterCount = (compact.match(/[A-Z]/g) || []).length;
-  if (compact.length < 8 || (digitCount < 2 && letterCount < 4)) {
-    return null;
+function findStandardPlate(rawStr) {
+  const upper = rawStr.toUpperCase();
+
+  // If text is obviously a ticket, booking, invoice, or receipt, do not extract a plate
+  for (const kw of NON_VEHICLE_KEYWORDS) {
+    if (upper.includes(kw)) return null;
   }
 
+  // Find candidate words or compact tokens that actually match a plate structure
+  // Indian plate tokens: state (2 letters) + district (1-2 digits) + series (0-3 letters) + serial (3-4 digits)
+  // Look for tokens that are separated by whitespace or line boundaries, or isolated tokens
+  const tokens = upper.match(/[A-Z0-9]{6,12}/g) || [];
   const candidates = new Map();
-  for (let start = 0; start <= compact.length - 7; start++) {
-    const state = findState(compact.slice(start, start + 2));
+
+  for (const token of tokens) {
+    const compact = token.replace(/[^A-Z0-9]/g, "");
+    if (compact.length < 8 || compact.length > 11) continue;
+
+    const state = findState(compact.slice(0, 2));
     if (!state) continue;
 
     for (const districtLength of [2, 1]) {
-      const districtStart = start + 2;
+      const districtStart = 2;
       const districtSlice = compact.slice(districtStart, districtStart + districtLength);
       const districtCandidates = expandDigitSequences(districtSlice);
       if (districtCandidates.length === 0) continue;
@@ -120,7 +128,7 @@ function findStandardPlate(compact, rawStr = "") {
           const rawSeries = compact.slice(suffixStart, suffixStart + seriesLength);
           const series = normalizeLetters(rawSeries);
           const serialStart = suffixStart + seriesLength;
-          if (serialStart + serialLength > compact.length) continue;
+          if (serialStart + serialLength !== compact.length) continue;
           if (series.length !== seriesLength || !/^[A-Z]{0,3}$/.test(series)) continue;
 
           const rawSerial = compact.slice(serialStart, serialStart + serialLength);
@@ -131,21 +139,19 @@ function findStandardPlate(compact, rawStr = "") {
             for (const serial of serialCandidates) {
               const value = `${state}${district}${series}${serial}`;
               let score = 0;
-              // Length bonuses
               score += seriesLength === 2 ? 10 : seriesLength === 1 ? 6 : 2;
               score += districtLength === 2 ? 5 : 2;
               score += serialLength === 4 ? 6 : 2;
 
-              // Penalty if rawSerial characters needed alternative substitutions
               for (let i = 0; i < rawSerial.length; i++) {
                 if (rawSerial[i] === serial[i]) score += 3;
-                else if (rawSerial[i] === 'L' && serial[i] === '4') score += 2.5; // HSRP L->4 is very high fidelity
-                else if (rawSerial[i] === 'B' && serial[i] === '6') score += 2.5; // HSRP B->6 is very high fidelity
+                else if (rawSerial[i] === 'L' && serial[i] === '4') score += 2.5;
+                else if (rawSerial[i] === 'B' && serial[i] === '6') score += 2.5;
                 else score += 1;
               }
 
-              // Require a minimum score threshold so weak random combinations are rejected
-              if (score >= 18) {
+              // Plates must score >= 20 and be a distinct token
+              if (score >= 20) {
                 candidates.set(value, Math.max(candidates.get(value) || 0, score));
               }
             }
@@ -154,25 +160,38 @@ function findStandardPlate(compact, rawStr = "") {
       }
     }
   }
+
+  // Also support 2-row plates where state+district is on top line and series+serial on next line
+  const lines = upper.split(/[\r\n]+/).map((l) => l.replace(/[^A-Z0-9]/g, "").trim()).filter(Boolean);
+  for (let i = 0; i < lines.length - 1; i++) {
+    const top = lines[i];
+    const bottom = lines[i + 1];
+    if (top.length >= 3 && top.length <= 5 && bottom.length >= 4 && bottom.length <= 7) {
+      const combined = `${top}${bottom}`;
+      const state = findState(combined.slice(0, 2));
+      if (state) {
+        const res = formatPlate(combined);
+        if (res && res.split(" ").length >= 3) {
+          candidates.set(combined, 25);
+        }
+      }
+    }
+  }
+
   const best = [...candidates.entries()].sort((first, second) => second[1] - first[1])[0];
   return best ? formatPlate(best[0]) : null;
 }
 
-/**
- * Robustly parses Indian vehicle registration plates from raw OCR output.
- * Seamlessly handles single-line and two-row motorcycle plates (e.g., 'TN 59' on top, 'AX 2332' on bottom).
- */
 export function parsePlateString(raw) {
   if (!raw) return null;
 
   const rawStr = String(raw).toUpperCase().trim();
-  const compact = rawStr.replace(/[^A-Z0-9]/g, "");
+  for (const kw of NON_VEHICLE_KEYWORDS) {
+    if (rawStr.includes(kw)) return null;
+  }
 
-  // Require minimum structure before testing
-  if (compact.length < 7) return null;
-
-  const bhMatch = compact.match(BH_PLATE_PATTERN);
+  const bhMatch = rawStr.match(BH_PLATE_PATTERN);
   if (bhMatch) return formatPlate(bhMatch[0]);
 
-  return findStandardPlate(compact, rawStr);
+  return findStandardPlate(rawStr);
 }

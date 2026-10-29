@@ -16,6 +16,16 @@ function updateVisionModelStatus(status) {
   visionStatusListeners.forEach((listener) => listener(visionModelStatus));
 }
 
+/** Prewarm the YOLO model in the background so it is instantly ready when capturing photos */
+export function prewarmVisionModel() {
+  if (typeof window === "undefined") return;
+  setTimeout(() => {
+    runVisionTask("warmup", null).catch((err) => {
+      console.warn("[Vision] Model pre-warming skipped:", err);
+    });
+  }, 2000);
+}
+
 /** Run a task on the shared vision WebWorker. */
 function runVisionTask(type, imageSource, threshold = 0.40) {
   const task = visionQueue.then(async () => {
@@ -32,6 +42,7 @@ function runVisionTask(type, imageSource, threshold = 0.40) {
     } finally {
       visionRequests.delete(id);
       if (visionIdleTimer) clearTimeout(visionIdleTimer);
+      // Keep worker alive for 60s (or 30s on low-memory devices) to prevent recurring load overhead during capture sessions
       visionIdleTimer = setTimeout(() => {
         visionWorker?.terminate();
         visionWorker = null;
@@ -49,7 +60,7 @@ export function createImageThumbnail(imageSource) {
 }
 
 /** Generic object detection – returns labels, tags and raw detections. */
-export function getDetectedLabelsAndTags(imageSource, threshold = 0.40) {
+export function getDetectedLabelsAndTags(imageSource, threshold = 0.28) {
   return runVisionTask("detect", imageSource, threshold);
 }
 
@@ -67,7 +78,7 @@ export async function detectPlateRegion(imageSource, minScore = 0.6) {
       y: (box.ymin ?? 0) / 100,
       width: ((box.xmax ?? 0) - (box.xmin ?? 0)) / 100,
       height: ((box.ymax ?? 0) - (box.ymin ?? 0)) / 100,
-      angle: 0, // YOLO‑tiny does not provide rotation.
+      angle: 0,
     },
     score: result.score,
   };
@@ -83,8 +94,8 @@ const visionRequests = new Map();
 const visionIdleTimeout = typeof navigator !== "undefined" &&
   Number.isFinite(navigator.deviceMemory) &&
   navigator.deviceMemory <= 4
-  ? 8000
-  : 15000;
+  ? 30000
+  : 60000;
 
 function getVisionWorker() {
   if (visionWorker) return visionWorker;
