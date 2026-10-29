@@ -24,9 +24,21 @@ async function getDetector() {
         ObjectDetectionPipeline,
         env,
       } = await import("@huggingface/transformers");
-
+      // Detect if IndexedDB (browser cache) is unavailable (common in Capacitor webview).
+      // If unavailable, disable browser cache usage to force fresh model download via fetch.
+      let indexedDBAvailable = true;
+      try {
+        const testRequest = indexedDB.open('visionCacheTest');
+        testRequest.onerror = () => { indexedDBAvailable = false; };
+        testRequest.onsuccess = () => {
+          testRequest.result.close();
+          indexedDB.deleteDatabase('visionCacheTest');
+        };
+      } catch (e) {
+        indexedDBAvailable = false;
+      }
       env.allowLocalModels = false;
-      env.useBrowserCache = true;
+      env.useBrowserCache = indexedDBAvailable;
       const modelId = "Xenova/yolos-tiny";
       const hasWebGPU = typeof navigator !== "undefined" && !!navigator.gpu;
       const device = hasWebGPU ? "webgpu" : "wasm";
