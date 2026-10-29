@@ -71,10 +71,6 @@ function findState(value) {
   return null;
 }
 
-function normalizeDigits(value) {
-  return [...value].map((character) => OCR_TO_DIGIT[character] || character).join("");
-}
-
 function normalizeLetters(value) {
   return [...value].map((character) => OCR_TO_LETTER[character] || character).join("");
 }
@@ -99,7 +95,14 @@ function expandDigitSequences(rawString) {
   return results.filter((s) => /^\d+$/.test(s));
 }
 
-function findStandardPlate(compact) {
+function findStandardPlate(compact, rawStr = "") {
+  // If the raw text is very short or doesn't have at least some digit-like characters, reject to avoid hallucinations on noise
+  const digitCount = (compact.match(/\d/g) || []).length;
+  const letterCount = (compact.match(/[A-Z]/g) || []).length;
+  if (compact.length < 8 || (digitCount < 2 && letterCount < 4)) {
+    return null;
+  }
+
   const candidates = new Map();
   for (let start = 0; start <= compact.length - 7; start++) {
     const state = findState(compact.slice(start, start + 2));
@@ -131,7 +134,7 @@ function findStandardPlate(compact) {
               // Length bonuses
               score += seriesLength === 2 ? 10 : seriesLength === 1 ? 6 : 2;
               score += districtLength === 2 ? 5 : 2;
-              score += serialLength === 4 ? 4 : 1;
+              score += serialLength === 4 ? 6 : 2;
 
               // Penalty if rawSerial characters needed alternative substitutions
               for (let i = 0; i < rawSerial.length; i++) {
@@ -141,7 +144,10 @@ function findStandardPlate(compact) {
                 else score += 1;
               }
 
-              candidates.set(value, Math.max(candidates.get(value) || 0, score));
+              // Require a minimum score threshold so weak random combinations are rejected
+              if (score >= 18) {
+                candidates.set(value, Math.max(candidates.get(value) || 0, score));
+              }
             }
           }
         }
@@ -159,11 +165,14 @@ function findStandardPlate(compact) {
 export function parsePlateString(raw) {
   if (!raw) return null;
 
-  const rawStr = String(raw).toUpperCase();
+  const rawStr = String(raw).toUpperCase().trim();
   const compact = rawStr.replace(/[^A-Z0-9]/g, "");
+
+  // Require minimum structure before testing
+  if (compact.length < 7) return null;
 
   const bhMatch = compact.match(BH_PLATE_PATTERN);
   if (bhMatch) return formatPlate(bhMatch[0]);
 
-  return findStandardPlate(compact);
+  return findStandardPlate(compact, rawStr);
 }
