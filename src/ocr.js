@@ -48,16 +48,35 @@ export function extractStructuredIds(rawText) {
   if (!rawText) return [];
   const found = [];
   const upper = rawText.toUpperCase();
+
+  // Documents must contain supportive textual keywords to avoid false positives on random image noise
+  const hasGovKeywords = /(GOVERNMENT|INDIA|BHARAT|INCOME\s*TAX|PERMANENT\s*ACCOUNT|DIRECTORATE|DEPARTMENT|REPUBLIC)/i.test(upper);
+  const hasAadhaarKeywords = /(AADHAAR|UIDAI|ENROLMENT|MERA\s*AADHAAR|FATHER|DOB|YEAR\s*OF\s*BIRTH)/i.test(upper);
+  const hasDlKeywords = /(DRIVING|LICENCE|LICENSE|TRANSPORT|UNION\s*OF\s*INDIA|FORM\s*7)/i.test(upper);
+
+  // PAN: 5 uppercase letters, 4 digits, 1 uppercase letter (e.g., ABCDE1234F)
+  const panMatch = upper.match(/\b([A-Z]{5}\d{4}[A-Z])\b/);
+  if (panMatch && (hasGovKeywords || upper.includes("PAN") || upper.includes("ACCOUNT"))) {
+    found.push({ type: "pan", value: panMatch[1], tag: "#document" });
+  }
+
+  // Aadhaar: 12 digits, formatted as 4 4 4 (e.g. 1234 5678 9012) or with explicit Aadhaar keywords
+  const formattedAadhaar = upper.match(/\b(\d{4}\s\d{4}\s\d{4})\b/);
   const compact = upper.replace(/[^A-Z0-9]/g, "");
+  if (formattedAadhaar) {
+    found.push({ type: "aadhaar", value: formattedAadhaar[1].replace(/\s+/g, ""), tag: "#document" });
+  } else if (hasAadhaarKeywords) {
+    const compactAadhaar = compact.match(/(\d{12})/);
+    if (compactAadhaar) {
+      found.push({ type: "aadhaar", value: compactAadhaar[1], tag: "#document" });
+    }
+  }
 
-  const panMatch = compact.match(/([A-Z]{5}\d{4}[A-Z])/);
-  if (panMatch) found.push({ type: "pan", value: panMatch[1], tag: "#document" });
-
-  const aadhaarMatch = compact.match(/(\d{12})/);
-  if (aadhaarMatch) found.push({ type: "aadhaar", value: aadhaarMatch[1], tag: "#document" });
-
-  const dlMatch = compact.match(/([A-Z]{2}\d{13,15})/);
-  if (dlMatch) found.push({ type: "dl", value: dlMatch[1], tag: "#document" });
+  // Driving License: State code + 13-15 digits
+  const dlMatch = upper.match(/\b([A-Z]{2}[-\s]?\d{13,15})\b/);
+  if (dlMatch && (hasDlKeywords || upper.includes("DL") || hasGovKeywords)) {
+    found.push({ type: "dl", value: dlMatch[1].replace(/[-\s]/g, ""), tag: "#document" });
+  }
 
   return found;
 }
@@ -248,8 +267,6 @@ async function _performOCR(file, onProgress) {
   const displayText = plate && !cleanDisplayText.includes(plate)
     ? `Vehicle Plate: ${plate}\n${cleanDisplayText}`.trim()
     : cleanDisplayText;
-
- 
 
   return {
     text: displayText,
