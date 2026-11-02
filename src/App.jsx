@@ -410,7 +410,7 @@ export default function App() {
         ocr: updatedText,
         label: updatedLabel,
         tags: combinedTags,
-      }); 
+      });
     }
 
     const updated = await refreshCache();
@@ -443,7 +443,7 @@ export default function App() {
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (cameraInputRef.current) cameraInputRef.current.value = "";
 
-    try {
+    {
       const newEntries = files.map((file, i) => {
         const id = createId();
         const instantUrl = URL.createObjectURL(file);
@@ -610,30 +610,29 @@ export default function App() {
         const refreshed = await refreshCache();
         const refreshedSorted = [...refreshed].sort((a, b) => b.timestamp - a.timestamp);
         setAllEntries(refreshedSorted);
-        
-        try{
-        if (query.trim()) {
-          const ranked = await rankedSearch(query);
-          setFilteredEntries(ranked.slice(0, 20));
-        } else {
-          setFilteredEntries(refreshedSorted.slice(0, 20));
-        }
-      }catch (err) {
-        console.error("[Vision] Error occurred while processing entries:", err);
-      }
-    })
-    
-    try{
-      imageProcessingQueueRef.current = processingTask.catch((err) => {
-        console.error("[Vision] Background image processing failed:", err);
-        newEntries.forEach((entry) => thumbnailJobsRef.current.delete(entry.id));
-      });
-    } catch (err) {
-      console.error("Real-time image upload failed:", err);
-      alert("Error adding images. Please try again.");
-    }
 
-    finally{
+        try {
+          if (query.trim()) {
+            const ranked = await rankedSearch(query);
+            setFilteredEntries(ranked.slice(0, 20));
+          } else {
+            setFilteredEntries(refreshedSorted.slice(0, 20));
+          }
+        } catch (err) {
+          console.error("[Vision] Error occurred while processing entries:", err);
+        }
+      })();
+
+      try {
+        imageProcessingQueueRef.current = processingTask.catch((err) => {
+          console.error("[Vision] Background image processing failed:", err);
+          newEntries.forEach((entry) => thumbnailJobsRef.current.delete(entry.id));
+        });
+      } catch (err) {
+        console.error("Real-time image upload failed:", err);
+        alert("Error adding images. Please try again.");
+      }
+    }
   };
 
   const handleDeleteEntry = async (entry, e) => {
@@ -1322,4 +1321,6 @@ export default function App() {
           </div>
         );
       })()}
-    </div>}
+    </div>
+  );
+}
