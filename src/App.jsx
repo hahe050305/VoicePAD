@@ -488,7 +488,16 @@ export default function App() {
               return !["npn", "wwn", "broic", "ji", "er", "te"].includes(clean);
             };
 
+            let currentCardTags = ["#photo"];
+
             const syncCard = async (patch) => {
+              if (patch.tags && Array.isArray(patch.tags)) {
+                const set = new Set([...currentCardTags, ...patch.tags]);
+                currentCardTags = Array.from(set)
+                  .filter(isValidTag)
+                  .sort((a, b) => (a === "#photo" ? 1 : b === "#photo" ? -1 : 0));
+                patch.tags = currentCardTags;
+              }
               await db.images.update(entry.id, patch);
               const updateEntry = (item) => item.id === entry.id ? { ...item, ...patch } : item;
               setFilteredEntries((curr) => curr.map(updateEntry));
@@ -497,7 +506,6 @@ export default function App() {
 
             let currentOcrText = "";
             let currentPlate = null;
-            let currentOcrTags = ["#photo"];
 
             // Run OCR (Tesseract worker) and CLIP embedding (Vision worker) concurrently
             const ocrPromise = (async () => {
@@ -516,7 +524,7 @@ export default function App() {
                 const plateTags = currentPlate ? ["#vehicle", `#${currentPlate.replace(/\s+/g, "").toLowerCase()}`] : [];
                 const docTags = structuredIds.length > 0 ? ["#document"] : [];
 
-                currentOcrTags = Array.from(new Set([
+                const ocrTags = Array.from(new Set([
                   ...textTags,
                   ...plateTags,
                   ...docTags,
@@ -528,7 +536,7 @@ export default function App() {
                 await syncCard({
                   ocr: currentOcrText,
                   isPureImage: !currentPlate && structuredIds.length === 0 && currentOcrText.length === 0,
-                  tags: currentOcrTags.length > 0 ? currentOcrTags : ["#image", "#photo"],
+                  tags: ocrTags.length > 0 ? ocrTags : ["#photo"],
                 });
               } catch (ocrErr) {
                 console.warn("[Vision] OCR detection pass failed:", ocrErr);
@@ -537,9 +545,23 @@ export default function App() {
 
             const embedPromise = (async () => {
               try {
-                const embedding = await embedImage(file);
+                const embedResult = await embedImage(file);
+                const embedding = Array.isArray(embedResult)
+                  ? embedResult
+                  : embedResult?.embedding;
+                const visualTags = Array.isArray(embedResult?.visualTags)
+                  ? embedResult.visualTags
+                  : [];
+
+                const patch = {};
                 if (embedding && Array.isArray(embedding)) {
-                  await syncCard({ embedding });
+                  patch.embedding = embedding;
+                }
+                if (visualTags.length > 0) {
+                  patch.tags = visualTags;
+                }
+                if (Object.keys(patch).length > 0) {
+                  await syncCard(patch);
                 }
               } catch (embedErr) {
                 console.warn("[Vision] CLIP embedding pass failed:", embedErr);
