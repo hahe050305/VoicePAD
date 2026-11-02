@@ -8,11 +8,7 @@ let workerPromise = null;
 let idleTimer = null;
 let activeProgress = null;
 let queue = Promise.resolve();
-const idleTimeout = typeof navigator !== "undefined" &&
-  Number.isFinite(navigator.deviceMemory) &&
-  navigator.deviceMemory <= 4
-  ? 30000
-  : 60000;
+const idleTimeout = 180000; // Keep worker warm for 3 minutes during user session
 
 function resetIdleTimer(worker) {
   if (idleTimer) clearTimeout(idleTimer);
@@ -126,6 +122,9 @@ export async function recognizeWithTesseractEnhancements(image, options = {}) {
     : ["3", "6", "6", "11", "3"];
   for (const [index, candidate] of baseCandidates.entries()) {
     await recordCandidate(candidate, baseModes[index]);
+    if (bestScore >= 65 || (options.plate && parsePlateString(bestResult?.data?.text))) {
+      break; // Early exit as soon as high-confidence text or vehicle plate is detected
+    }
   }
 
   const bestText = bestResult?.data?.text?.trim() || "";

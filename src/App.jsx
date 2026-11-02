@@ -1,7 +1,7 @@
 // src/App.jsx
 import { useEffect, useState, useRef, useCallback } from "react";
 import { db, seedDemoData } from "./db.js";
-import { rankedSearch, fastSearch, refreshCache, getImageThumbnailUrl, getImageSource } from "./search.js";
+import { rankedSearch, fastSearch, refreshCache, getImageThumbnailUrl, setImageThumbnailUrl, getImageSource } from "./search.js";
 import { performOCR, recognizeVehiclePlate, isPureImageText } from "./ocr.js";
 import { deriveTags } from "./tagger.js";
 import {
@@ -444,16 +444,22 @@ export default function App() {
     if (cameraInputRef.current) cameraInputRef.current.value = "";
 
     try {
-      const newEntries = files.map((file, i) => ({
-        id: createId(),
-        type: "image",
-        imageBlob: file,
-        label: "",
-        ocr: "",
-        isPureImage: true,
-        tags: ["#image", "#photo"],
-        timestamp: Date.now() + i,
-      }));
+      const newEntries = files.map((file, i) => {
+        const id = createId();
+        const instantUrl = URL.createObjectURL(file);
+        setImageThumbnailUrl(id, instantUrl);
+        return {
+          id,
+          type: "image",
+          imageBlob: file,
+          thumbnailUrl: instantUrl,
+          label: "",
+          ocr: "",
+          isPureImage: true,
+          tags: ["#image", "#photo"],
+          timestamp: Date.now() + i,
+        };
+      });
       newEntries.forEach((entry) => thumbnailJobsRef.current.add(entry.id));
 
       await db.images.bulkAdd(newEntries);
@@ -480,39 +486,59 @@ export default function App() {
             const file = record?.imageBlob || record?.blobUrl;
             if (!file) throw new Error("Image source is unavailable.");
             console.log(`[Vision] Processing image ${i + 1}/${newEntries.length}...`);
-            const thumbnail = await createImageThumbnail(file).catch((err) => {
-              console.warn("[Vision] Thumbnail creation failed:", err);
-              return null;
+
+            // Generate compressed thumbnail for IndexedDB storage in background
+            createImageThumbnail(file)
+              .then(async (thumbnail) => {
+                if (thumbnail) {
+                  await db.images.update(entry.id, { thumbnailBlob: thumbnail });
+                }
+              })
+              .catch((err) => console.warn("[Vision] Thumbnail background generation:", err));
+
+            const isValidTag = (tag) => {
+              const clean = tag.replace("#", "").toLowerCase();
+              if (clean.length < 3 || !/[aeiou0-9]/.test(clean) || /(.)\1\1/.test(clean)) return false;
+              return !["npn", "wwn", "broic", "ji", "er", "te"].includes(clean);
+            };
+
+            // Progressive pipeline:
+            // 1. Run YOLO object detection first - updates UI with tags in ~300-600ms
+            const visionPromise = getDetectedLabelsAndTags(file).then(async (visionResultRaw) => {
+              const visionResult = visionResultRaw || { labels: [], tags: [], detections: [] };
+              const isVehicle = (visionResult.labels || []).some((l) =>
+                ["car", "motorcycle", "truck", "bus"].includes(l)
+              );
+              const visionTags = Array.from(new Set([
+                ...(visionResult.tags || []),
+                ...(isVehicle ? ["#vehicle"] : []),
+                "#photo",
+              ])).filter(isValidTag);
+
+              if (visionTags.length > 0 || (visionResult.labels || []).length > 0) {
+                await db.images.update(entry.id, {
+                  detectedObjects: visionResult.labels || [],
+                  tags: visionTags,
+                });
+                const updateVisionOnly = (item) => item.id === entry.id
+                  ? { ...item, detectedObjects: visionResult.labels || [], tags: visionTags }
+                  : item;
+                setFilteredEntries((curr) => curr.map(updateVisionOnly));
+                setAllEntries((curr) => curr.map(updateVisionOnly));
+              }
+              return visionResult;
+            }).catch((err) => {
+              console.warn("[Vision] Vision detection error:", err);
+              return { labels: [], tags: [], detections: [] };
             });
-            let previewUrl = null;
-            if (thumbnail) {
-              await db.images.update(entry.id, { thumbnailBlob: thumbnail });
-              previewUrl = getImageThumbnailUrl(entry.id, thumbnail);
-            } else {
-              await db.images.update(entry.id, { thumbnailFailed: true });
-            }
-            const updatePreview = (image) => image.id === entry.id
-              ? { ...image, thumbnailUrl: previewUrl, thumbnailFailed: !thumbnail }
-              : image;
-            setFilteredEntries((current) => current.map(updatePreview));
-            setSelectedEntry((current) => current?.id === entry.id ? updatePreview(current) : current);
 
-            await new Promise((resolve) => setTimeout(resolve, 0));
+            // 2. Concurrently run OCR in background
+            const ocrPromise = performOCR(file).catch((err) => {
+              console.warn("[Vision] OCR error:", err);
+              return "";
+            });
 
-            // Run object detection & OCR concurrently for maximum throughput
-            const [visionResultRaw, ocrResultRaw] = await Promise.all([
-              getDetectedLabelsAndTags(file).catch((err) => {
-                console.warn("[Vision] Vision detection error:", err);
-                return { labels: [], tags: [], detections: [] };
-              }),
-              performOCR(file).catch((err) => {
-                console.warn("[Vision] OCR error:", err);
-                return "";
-              }),
-            ]);
-
-            const visionResult = visionResultRaw || { labels: [], tags: [], detections: [] };
-            const ocrResult = ocrResultRaw || "";
+            const [visionResult, ocrResult] = await Promise.all([visionPromise, ocrPromise]);
 
             let extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
             let activePlate = typeof ocrResult === "object" && ocrResult?.plate ? ocrResult.plate : null;
@@ -539,12 +565,6 @@ export default function App() {
             const hasVehiclePlate = !!activePlate;
             const hasStructuredId = structuredIds.length > 0;
 
-            const isValidTag = (tag) => {
-              const clean = tag.replace("#", "").toLowerCase();
-              if (clean.length < 3 || !/[aeiou0-9]/.test(clean) || /(.)\1\1/.test(clean)) return false;
-              return !["npn", "wwn", "broic", "ji", "er", "te"].includes(clean);
-            };
-
             const textTags = cleanText ? deriveTags(cleanText) : [];
             const activeVisionTags = visionResult.tags || [];
             const idTags = structuredIds.map((id) => `#${id.value.toLowerCase()}`);
@@ -568,6 +588,18 @@ export default function App() {
               detectedObjects: visionResult.labels || [],
               tags: combinedTags,
             });
+
+            const updateFinal = (item) => item.id === entry.id
+              ? {
+                  ...item,
+                  ocr: finalOcrText,
+                  isPureImage: !hasVehiclePlate && !hasStructuredId && finalOcrText.length === 0,
+                  detectedObjects: visionResult.labels || [],
+                  tags: combinedTags,
+                }
+              : item;
+            setFilteredEntries((curr) => curr.map(updateFinal));
+            setAllEntries((curr) => curr.map(updateFinal));
           } catch (err) {
             console.error("[Vision] Silent background processing failed:", err);
           } finally {
@@ -578,13 +610,20 @@ export default function App() {
         const refreshed = await refreshCache();
         const refreshedSorted = [...refreshed].sort((a, b) => b.timestamp - a.timestamp);
         setAllEntries(refreshedSorted);
+        
+        try{
         if (query.trim()) {
           const ranked = await rankedSearch(query);
           setFilteredEntries(ranked.slice(0, 20));
         } else {
           setFilteredEntries(refreshedSorted.slice(0, 20));
         }
-      });
+      }catch (err) {
+        console.error("[Vision] Error occurred while processing entries:", err);
+      }
+    })
+    
+    try{
       imageProcessingQueueRef.current = processingTask.catch((err) => {
         console.error("[Vision] Background image processing failed:", err);
         newEntries.forEach((entry) => thumbnailJobsRef.current.delete(entry.id));
@@ -593,6 +632,8 @@ export default function App() {
       console.error("Real-time image upload failed:", err);
       alert("Error adding images. Please try again.");
     }
+
+    finally{
   };
 
   const handleDeleteEntry = async (entry, e) => {
@@ -1281,6 +1322,4 @@ export default function App() {
           </div>
         );
       })()}
-    </div>
-  );
-}
+    </div>}

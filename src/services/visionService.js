@@ -41,22 +41,51 @@ function runVisionTask(type, imageSource, threshold = 0.40) {
       return await result;
     } finally {
       visionRequests.delete(id);
-      if (visionIdleTimer) clearTimeout(visionIdleTimer);
-      // Keep worker alive for 60s (or 30s on low-memory devices) to prevent recurring load overhead during capture sessions
-      visionIdleTimer = setTimeout(() => {
-        visionWorker?.terminate();
-        visionWorker = null;
-        visionIdleTimer = null;
-        updateVisionModelStatus({ state: "idle", progress: null, error: null });
-      }, visionIdleTimeout);
     }
   });
   visionQueue = task.catch(() => {});
   return task;
 }
 
-export function createImageThumbnail(imageSource) {
-  return runVisionTask("thumbnail", imageSource);
+export async function createImageThumbnail(imageSource) {
+  // Fast, non-blocking client-side thumbnail generation
+  try {
+    const blob = imageSource instanceof Blob ? imageSource : await (await fetch(imageSource)).blob();
+    const bitmap = await createImageBitmap(blob);
+    try {
+      const maxDim = 480;
+      const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+      const width = Math.max(1, Math.round(bitmap.width * scale));
+      const height = Math.max(1, Math.round(bitmap.height * scale));
+
+      if (typeof OffscreenCanvas === "function") {
+        const canvas = new OffscreenCanvas(width, height);
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(bitmap, 0, 0, width, height);
+          return await canvas.convertToBlob({ type: "image/jpeg", quality: 0.80 });
+        }
+      }
+
+      if (typeof document !== "undefined") {
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(bitmap, 0, 0, width, height);
+          return await new Promise((resolve) => {
+            canvas.toBlob((b) => resolve(b || blob), "image/jpeg", 0.80);
+          });
+        }
+      }
+      return blob;
+    } finally {
+      bitmap.close();
+    }
+  } catch {
+    return runVisionTask("thumbnail", imageSource).catch(() => null);
+  }
 }
 
 /** Generic object detection – returns labels, tags and raw detections. */

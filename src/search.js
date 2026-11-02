@@ -139,6 +139,10 @@ export function getImageThumbnailUrl(imageId, thumbnailBlob) {
   return url;
 }
 
+export function setImageThumbnailUrl(imageId, url) {
+  imageThumbnailUrls.set(imageId, url);
+}
+
 export async function refreshCache() {
   const notes = await db.notes.toArray();
   const images = [];
@@ -153,6 +157,8 @@ export async function refreshCache() {
     let thumbnailUrl;
     if (thumbnailBlob instanceof Blob) {
       thumbnailUrl = getImageThumbnailUrl(image.id, thumbnailBlob);
+    } else if (imageThumbnailUrls.has(image.id)) {
+      thumbnailUrl = imageThumbnailUrls.get(image.id);
     }
     images.push({ ...metadata, thumbnailUrl });
   });

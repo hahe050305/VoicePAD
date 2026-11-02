@@ -24,21 +24,20 @@ async function getDetector() {
         ObjectDetectionPipeline,
         env,
       } = await import("@huggingface/transformers");
-      // Detect if IndexedDB (browser cache) is unavailable (common in Capacitor webview).
-      // If unavailable, disable browser cache usage to force fresh model download via fetch.
-      let indexedDBAvailable = true;
+      // Check if Cache API is actually supported and accessible in this context.
+      // On mobile browsers accessing via HTTP LAN IP (insecure context), `caches` is undefined.
+      // If useBrowserCache is true when caches is undefined, Transformers.js throws:
+      // "Browser cache is not available in this environment."
+      let isCacheAvailable = false;
       try {
-        const testRequest = indexedDB.open('visionCacheTest');
-        testRequest.onerror = () => { indexedDBAvailable = false; };
-        testRequest.onsuccess = () => {
-          testRequest.result.close();
-          indexedDB.deleteDatabase('visionCacheTest');
-        };
-      } catch (e) {
-        indexedDBAvailable = false;
+        isCacheAvailable = typeof caches !== "undefined" && typeof caches.open === "function";
+      } catch {
+        isCacheAvailable = false;
       }
-      env.allowLocalModels = true; // Enable loading of bundled local models as fallback on platforms without IndexedDB cache
-      env.useBrowserCache = indexedDBAvailable;
+      env.useBrowserCache = isCacheAvailable;
+      env.useWasmCache = isCacheAvailable;
+      env.allowLocalModels = false;
+      env.allowRemoteModels = true;
       const modelId = "Xenova/yolos-tiny";
       const hasWebGPU = typeof navigator !== "undefined" && !!navigator.gpu;
       const device = hasWebGPU ? "webgpu" : "wasm";
