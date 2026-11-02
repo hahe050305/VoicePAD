@@ -472,7 +472,7 @@ export default function App() {
       }, 2500);
 
       // Run Vision & OCR pipeline silently in the background
-      const processingTask = imageProcessingQueueRef.current.then(async () => {
+      const processingTask = (async () => {
         for (let i = 0; i < newEntries.length; i++) {
           const entry = newEntries[i];
           try {

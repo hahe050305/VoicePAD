@@ -37,7 +37,7 @@ async function getDetector() {
       } catch (e) {
         indexedDBAvailable = false;
       }
-      env.allowLocalModels = false;
+      env.allowLocalModels = true; // Enable loading of bundled local models as fallback on platforms without IndexedDB cache
       env.useBrowserCache = indexedDBAvailable;
       const modelId = "Xenova/yolos-tiny";
       const hasWebGPU = typeof navigator !== "undefined" && !!navigator.gpu;
