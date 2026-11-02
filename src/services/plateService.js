@@ -105,8 +105,33 @@ function findStandardPlate(rawStr) {
 
   // Find candidate words or compact tokens that actually match a plate structure
   // Indian plate tokens: state (2 letters) + district (1-2 digits) + series (0-3 letters) + serial (3-4 digits)
-  // Look for tokens that are separated by whitespace or line boundaries, or isolated tokens
+  // Supports single-line (e.g. 22 BH 6517 A) and 2-line plates (e.g. BR01C / J6440)
   const tokens = upper.match(/[A-Z0-9]{6,12}/g) || [];
+
+  // Build candidate combinations from space- or newline-separated words
+  const rawWords = upper.replace(/[^A-Z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+  for (let i = 0; i < rawWords.length; i++) {
+    let combo = "";
+    for (let j = i; j < Math.min(rawWords.length, i + 5); j++) {
+      combo += rawWords[j];
+      if (combo.length >= 8 && combo.length <= 14) {
+        tokens.push(combo);
+        if (combo.startsWith("IND") && combo.length >= 11) {
+          tokens.push(combo.slice(3));
+        }
+      }
+    }
+  }
+
+  // Also include entire alphanumeric text if length is right
+  const fullCompact = upper.replace(/[^A-Z0-9]/g, "");
+  if (fullCompact.length >= 8 && fullCompact.length <= 14) {
+    tokens.push(fullCompact);
+    if (fullCompact.startsWith("IND")) {
+      tokens.push(fullCompact.slice(3));
+    }
+  }
+
   const candidates = new Map();
 
   for (const token of tokens) {

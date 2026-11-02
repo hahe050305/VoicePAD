@@ -6,7 +6,7 @@ import { performOCR, recognizeVehiclePlate, isPureImageText } from "./ocr.js";
 import { deriveTags } from "./tagger.js";
 import {
   createImageThumbnail,
-  getDetectedLabelsAndTags,
+  embedImage,
   subscribeVisionModelStatus,
   prewarmVisionModel,
 } from "./services/visionService.js";
@@ -97,10 +97,6 @@ export default function App() {
     };
   }, [selectedEntry?.id, selectedEntry?.type]);
 
-  // Top-right label reminder popup for newly uploaded unlabeled images
-  const [showLabelReminder, setShowLabelReminder] = useState(false);
-  const reminderTimerRef = useRef(null);
-
   const recognizerRef = useRef(null);
   const fileInputRef = useRef(null);
   const searchDebounceRef = useRef(null);
@@ -177,7 +173,6 @@ export default function App() {
 
     return () => {
       unsubscribeVisionStatus();
-      if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);
     };
   }, [loadEntries]);
 
@@ -437,14 +432,14 @@ export default function App() {
   };
 
   const handleImageCapture = async (e) => {
-    const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
+    const rawFiles = Array.from(e.target.files || []);
+    if (rawFiles.length === 0) return;
 
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (cameraInputRef.current) cameraInputRef.current.value = "";
 
-    {
-      const newEntries = files.map((file, i) => {
+    try {
+      const newEntries = rawFiles.map((file, i) => {
         const id = createId();
         const instantUrl = URL.createObjectURL(file);
         setImageThumbnailUrl(id, instantUrl);
@@ -463,29 +458,20 @@ export default function App() {
       newEntries.forEach((entry) => thumbnailJobsRef.current.add(entry.id));
 
       await db.images.bulkAdd(newEntries);
-      files.length = 0;
-      newEntries.forEach((entry) => {
-        delete entry.imageBlob;
-      });
       const updated = await refreshCache();
       const sorted = [...updated].sort((a, b) => b.timestamp - a.timestamp);
       setAllEntries(sorted);
       setFilteredEntries(sorted.slice(0, 20));
 
-      if (reminderTimerRef.current) clearTimeout(reminderTimerRef.current);
-      reminderTimerRef.current = setTimeout(() => {
-        setShowLabelReminder(true);
-      }, 2500);
-
-      // Run Vision & OCR pipeline silently in the background
+      // Run OCR & CLIP Vector Embedding silently in background
       const processingTask = (async () => {
         for (let i = 0; i < newEntries.length; i++) {
           const entry = newEntries[i];
+          const file = rawFiles[i];
+          if (!file) continue;
+
           try {
-            const record = await db.images.get(entry.id);
-            const file = record?.imageBlob || record?.blobUrl;
-            if (!file) throw new Error("Image source is unavailable.");
-            console.log(`[Vision] Processing image ${i + 1}/${newEntries.length}...`);
+            console.log(`[Vision] Embedding image ${i + 1}/${newEntries.length}...`);
 
             // Generate compressed thumbnail for IndexedDB storage in background
             createImageThumbnail(file)
@@ -502,106 +488,68 @@ export default function App() {
               return !["npn", "wwn", "broic", "ji", "er", "te"].includes(clean);
             };
 
-            // Progressive pipeline:
-            // 1. Run YOLO object detection first - updates UI with tags in ~300-600ms
-            const visionPromise = getDetectedLabelsAndTags(file).then(async (visionResultRaw) => {
-              const visionResult = visionResultRaw || { labels: [], tags: [], detections: [] };
-              const isVehicle = (visionResult.labels || []).some((l) =>
-                ["car", "motorcycle", "truck", "bus"].includes(l)
-              );
-              const visionTags = Array.from(new Set([
-                ...(visionResult.tags || []),
-                ...(isVehicle ? ["#vehicle"] : []),
-                "#photo",
-              ])).filter(isValidTag);
+            const syncCard = async (patch) => {
+              await db.images.update(entry.id, patch);
+              const updateEntry = (item) => item.id === entry.id ? { ...item, ...patch } : item;
+              setFilteredEntries((curr) => curr.map(updateEntry));
+              setAllEntries((curr) => curr.map(updateEntry));
+            };
 
-              if (visionTags.length > 0 || (visionResult.labels || []).length > 0) {
-                await db.images.update(entry.id, {
-                  detectedObjects: visionResult.labels || [],
-                  tags: visionTags,
+            let currentOcrText = "";
+            let currentPlate = null;
+            let currentOcrTags = ["#photo"];
+
+            // Run OCR (Tesseract worker) and CLIP embedding (Vision worker) concurrently
+            const ocrPromise = (async () => {
+              try {
+                const ocrResult = await performOCR(file);
+                const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
+                currentPlate = typeof ocrResult === "object" && ocrResult?.plate ? ocrResult.plate : null;
+                const structuredIds = typeof ocrResult === "object" && Array.isArray(ocrResult?.structuredIds) ? ocrResult.structuredIds : [];
+                const cleanText = extractedText.trim();
+                currentOcrText = currentPlate && !cleanText.includes(currentPlate)
+                  ? `${currentPlate}\n${cleanText}`.trim()
+                  : cleanText;
+
+                const textTags = cleanText ? deriveTags(cleanText) : [];
+                const idTags = structuredIds.map((id) => `#${id.value.toLowerCase()}`);
+                const plateTags = currentPlate ? ["#vehicle", `#${currentPlate.replace(/\s+/g, "").toLowerCase()}`] : [];
+                const docTags = structuredIds.length > 0 ? ["#document"] : [];
+
+                currentOcrTags = Array.from(new Set([
+                  ...textTags,
+                  ...plateTags,
+                  ...docTags,
+                  ...idTags,
+                  "#photo",
+                ])).filter(isValidTag);
+
+                // Update the UI card immediately with OCR results as soon as ready
+                await syncCard({
+                  ocr: currentOcrText,
+                  isPureImage: !currentPlate && structuredIds.length === 0 && currentOcrText.length === 0,
+                  tags: currentOcrTags.length > 0 ? currentOcrTags : ["#image", "#photo"],
                 });
-                const updateVisionOnly = (item) => item.id === entry.id
-                  ? { ...item, detectedObjects: visionResult.labels || [], tags: visionTags }
-                  : item;
-                setFilteredEntries((curr) => curr.map(updateVisionOnly));
-                setAllEntries((curr) => curr.map(updateVisionOnly));
+              } catch (ocrErr) {
+                console.warn("[Vision] OCR detection pass failed:", ocrErr);
               }
-              return visionResult;
-            }).catch((err) => {
-              console.warn("[Vision] Vision detection error:", err);
-              return { labels: [], tags: [], detections: [] };
-            });
+            })();
 
-            // 2. Concurrently run OCR in background
-            const ocrPromise = performOCR(file).catch((err) => {
-              console.warn("[Vision] OCR error:", err);
-              return "";
-            });
-
-            const [visionResult, ocrResult] = await Promise.all([visionPromise, ocrPromise]);
-
-            let extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
-            let activePlate = typeof ocrResult === "object" && ocrResult?.plate ? ocrResult.plate : null;
-            const structuredIds = typeof ocrResult === "object" && Array.isArray(ocrResult?.structuredIds) ? ocrResult.structuredIds : [];
-            let cleanText = extractedText.trim();
-
-            const isVehicleImage = (visionResult.labels || []).some((label) =>
-              ["car", "motorcycle", "truck", "bus"].includes(label)
-            );
-
-            // If a vehicle was actually detected by YOLO and no plate was found yet, attempt plate-focused OCR
-            if (!activePlate && isVehicleImage) {
-              const plateResult = await recognizeVehiclePlate(file).catch((err) => {
-                console.warn("[Vision] Plate-focused OCR error:", err);
-                return null;
-              });
-              if (plateResult?.plate) {
-                activePlate = plateResult.plate;
-                extractedText = `Vehicle Plate: ${activePlate}`;
-                cleanText = `${extractedText}\n${cleanText}`.trim();
-              }
-            }
-
-            const hasVehiclePlate = !!activePlate;
-            const hasStructuredId = structuredIds.length > 0;
-
-            const textTags = cleanText ? deriveTags(cleanText) : [];
-            const activeVisionTags = visionResult.tags || [];
-            const idTags = structuredIds.map((id) => `#${id.value.toLowerCase()}`);
-
-            const rawCombinedTags = [
-              ...textTags,
-              ...activeVisionTags,
-              ...idTags,
-              ...(hasVehiclePlate ? ["#vehicle", `#${activePlate.replace(/\s+/g, "").toLowerCase()}`] : []),
-              ...(hasStructuredId ? ["#document"] : []),
-              ...(activeVisionTags.length > 0 || !cleanText ? ["#photo"] : []),
-            ];
-            const combinedTags = Array.from(new Set(rawCombinedTags.filter(isValidTag)));
-            const finalOcrText = activePlate && !cleanText.includes(activePlate)
-              ? `${activePlate}\n${cleanText}`.trim()
-              : cleanText;
-
-            await db.images.update(entry.id, {
-              ocr: finalOcrText,
-              isPureImage: !hasVehiclePlate && !hasStructuredId && finalOcrText.length === 0,
-              detectedObjects: visionResult.labels || [],
-              tags: combinedTags,
-            });
-
-            const updateFinal = (item) => item.id === entry.id
-              ? {
-                  ...item,
-                  ocr: finalOcrText,
-                  isPureImage: !hasVehiclePlate && !hasStructuredId && finalOcrText.length === 0,
-                  detectedObjects: visionResult.labels || [],
-                  tags: combinedTags,
+            const embedPromise = (async () => {
+              try {
+                const embedding = await embedImage(file);
+                if (embedding && Array.isArray(embedding)) {
+                  await syncCard({ embedding });
                 }
-              : item;
-            setFilteredEntries((curr) => curr.map(updateFinal));
-            setAllEntries((curr) => curr.map(updateFinal));
+              } catch (embedErr) {
+                console.warn("[Vision] CLIP embedding pass failed:", embedErr);
+              }
+            })();
+
+            await Promise.all([ocrPromise, embedPromise]);
+
           } catch (err) {
-            console.error("[Vision] Silent background processing failed:", err);
+            console.error("[Vision] Image processing failed:", err);
           } finally {
             thumbnailJobsRef.current.delete(entry.id);
           }
@@ -619,19 +567,18 @@ export default function App() {
             setFilteredEntries(refreshedSorted.slice(0, 20));
           }
         } catch (err) {
-          console.error("[Vision] Error occurred while processing entries:", err);
+          console.error("[Vision] Search refresh failed:", err);
         }
       })();
 
-      try {
-        imageProcessingQueueRef.current = processingTask.catch((err) => {
-          console.error("[Vision] Background image processing failed:", err);
-          newEntries.forEach((entry) => thumbnailJobsRef.current.delete(entry.id));
-        });
-      } catch (err) {
-        console.error("Real-time image upload failed:", err);
-        alert("Error adding images. Please try again.");
-      }
+      imageProcessingQueueRef.current = processingTask.catch((err) => {
+        console.error("[Vision] Background image processing queue failed:", err);
+        newEntries.forEach((entry) => thumbnailJobsRef.current.delete(entry.id));
+      });
+
+    } catch (err) {
+      console.error("Real-time image upload failed:", err);
+      alert("Error adding images. Please try again.");
     }
   };
 
@@ -658,50 +605,6 @@ export default function App() {
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center px-4 py-8 antialiased selection:bg-indigo-500 selection:text-white">
-      {/* Top-Right Notification: Appears on every unlabelled image upload after a few seconds */}
-      {showLabelReminder && (
-        <div className="fixed top-5 right-5 z-50 max-w-sm animate-in fade-in slide-in-from-top-4 duration-300">
-          <div className="bg-slate-900/95 border border-amber-500/50 shadow-2xl rounded-2xl p-3.5 backdrop-blur-md flex items-start gap-3 text-slate-100">
-            <span className="text-xs font-semibold uppercase tracking-wide text-amber-300 shrink-0 mt-1">Label</span>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-semibold text-amber-300">
-                Unlabeled image uploaded
-              </p>
-              <p className="text-[11px] text-slate-300 mt-0.5 leading-snug">
-                Add a quick label (for example, "Selfie" or "License Plate") to make voice search more reliable.
-              </p>
-              <div className="flex items-center gap-2 mt-2">
-                <button
-                  onClick={() => {
-                    const firstUnlabeled = allEntries.find((e) => e.type === "image" && !e.label);
-                    if (firstUnlabeled) {
-                      startEditing(firstUnlabeled);
-                    }
-                    setShowLabelReminder(false);
-                  }}
-                  className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-lg text-[11px] font-semibold transition shadow"
-                >
-                  Label Now
-                </button>
-                <button
-                  onClick={() => setShowLabelReminder(false)}
-                  className="px-2 py-1 text-[11px] text-slate-400 hover:text-slate-200 transition"
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
-            <button
-              onClick={() => setShowLabelReminder(false)}
-              className="text-slate-500 hover:text-slate-300 text-xs p-1"
-              aria-label="Close reminder"
-            >
-              ×
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Header */}
       <header className="w-full max-w-xl flex items-center justify-between pb-6 border-b border-slate-800/80 mb-8">
         <div>

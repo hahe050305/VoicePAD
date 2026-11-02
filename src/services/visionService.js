@@ -1,6 +1,5 @@
 // src/services/visionService.js
-import { HYPERLOCAL_COCO_TAGS } from "./visionTags.js";
-export { HYPERLOCAL_COCO_TAGS };
+// Provides client interface to the CLIP vector embedding worker and thumbnail generation.
 
 let visionModelStatus = { state: "idle", progress: null, error: null };
 const visionStatusListeners = new Set();
@@ -16,35 +15,32 @@ function updateVisionModelStatus(status) {
   visionStatusListeners.forEach((listener) => listener(visionModelStatus));
 }
 
-/** Prewarm the YOLO model in the background so it is instantly ready when capturing photos */
+/** Prewarm the CLIP models in the background */
 export function prewarmVisionModel() {
   if (typeof window === "undefined") return;
   setTimeout(() => {
     runVisionTask("warmup", null).catch((err) => {
-      console.warn("[Vision] Model pre-warming skipped:", err);
+      console.warn("[Vision] CLIP Model pre-warming skipped:", err);
     });
   }, 2000);
 }
 
-/** Run a task on the shared vision WebWorker. */
-function runVisionTask(type, imageSource, threshold = 0.40) {
-  const task = visionQueue.then(async () => {
-    if (visionIdleTimer) clearTimeout(visionIdleTimer);
-    visionIdleTimer = null;
-    const worker = getVisionWorker();
-    const id = ++visionRequestId;
-    const result = new Promise((resolve, reject) => {
-      visionRequests.set(id, { resolve, reject });
-      worker.postMessage({ id, type, imageSource, threshold });
-    });
-    try {
-      return await result;
-    } finally {
-      visionRequests.delete(id);
-    }
-  });
-  visionQueue = task.catch(() => {});
-  return task;
+/** Extract 512-dimensional normalized vector embedding from an image */
+export function embedImage(imageSource) {
+  return runVisionTask("embedImage", imageSource);
+}
+
+/** Extract 512-dimensional normalized vector embedding from a text search query */
+export function embedText(text) {
+  return runVisionTask("embedText", text);
+}
+
+/** Backward compatibility placeholders */
+export function getDetectedLabelsAndTags() {
+  return Promise.resolve({ labels: [], tags: [], detections: [] });
+}
+export function detectPlateRegion() {
+  return Promise.resolve(null);
 }
 
 export async function createImageThumbnail(imageSource) {
@@ -88,31 +84,6 @@ export async function createImageThumbnail(imageSource) {
   }
 }
 
-/** Generic object detection – returns labels, tags and raw detections. */
-export function getDetectedLabelsAndTags(imageSource, threshold = 0.28) {
-  return runVisionTask("detect", imageSource, threshold);
-}
-
-/**
- * Detect the licence‑plate region using the vision worker.
- * Returns { box, score } where box = { x, y, width, height, angle }.
- */
-export async function detectPlateRegion(imageSource, minScore = 0.6) {
-  const result = await runVisionTask("detectPlate", imageSource, minScore);
-  if (!result?.box || result.score < minScore) return null;
-  const { box } = result;
-  return {
-    box: {
-      x: (box.xmin ?? 0) / 100,
-      y: (box.ymin ?? 0) / 100,
-      width: ((box.xmax ?? 0) - (box.xmin ?? 0)) / 100,
-      height: ((box.ymax ?? 0) - (box.ymin ?? 0)) / 100,
-      angle: 0,
-    },
-    score: result.score,
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Worker management
 let visionWorker = null;
@@ -120,11 +91,32 @@ let visionIdleTimer = null;
 let visionRequestId = 0;
 let visionQueue = Promise.resolve();
 const visionRequests = new Map();
-const visionIdleTimeout = typeof navigator !== "undefined" &&
-  Number.isFinite(navigator.deviceMemory) &&
-  navigator.deviceMemory <= 4
-  ? 30000
-  : 60000;
+
+function runVisionTask(type, payload) {
+  const task = visionQueue.then(async () => {
+    if (visionIdleTimer) clearTimeout(visionIdleTimer);
+    visionIdleTimer = null;
+    const worker = getVisionWorker();
+    const id = ++visionRequestId;
+    const result = new Promise((resolve, reject) => {
+      visionRequests.set(id, { resolve, reject });
+      if (type === "embedImage" || type === "thumbnail") {
+        worker.postMessage({ id, type, imageSource: payload });
+      } else if (type === "embedText") {
+        worker.postMessage({ id, type, text: payload });
+      } else {
+        worker.postMessage({ id, type });
+      }
+    });
+    try {
+      return await result;
+    } finally {
+      visionRequests.delete(id);
+    }
+  });
+  visionQueue = task.catch(() => {});
+  return task;
+}
 
 function getVisionWorker() {
   if (visionWorker) return visionWorker;

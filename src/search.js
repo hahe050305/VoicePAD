@@ -3,6 +3,16 @@ import { db } from "./db.js";
 import aliasMap from "./aliasMap.json";
 import { deriveTags } from "./tagger.js";
 import { isPureImageText } from "./ocr.js";
+import { embedText } from "./services/visionService.js";
+
+export function cosineSimilarity(a, b) {
+  if (!a || !b || a.length !== b.length) return 0;
+  let dot = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+  }
+  return dot;
+}
 
 const STOP_WORDS = new Set([
   "a", "an", "and", "are", "at", "did", "do", "does", "for", "from", "give",
@@ -319,19 +329,33 @@ export async function rankedSearch(rawQuery) {
   }
 
   const tokens = normalizeQuery(rawQuery);
-  if (tokens.length === 0) {
-    return [];
-  }
+  const queryVector = await embedText(rawQuery).catch(() => null);
 
   const topMatches = [];
   const compareMatches = (a, b) =>
     b.score !== a.score
       ? b.score - a.score
       : b.entry.timestamp - a.entry.timestamp;
+
   let sliceStartedAt = performance.now();
   for (let index = 0; index < cachedEntries.length; index++) {
     const entry = cachedEntries[index];
-    const score = scoreEntry(entry, tokens);
+    let score = tokens.length > 0 ? scoreEntry(entry, tokens) : 0;
+
+    // Vector Similarity Scoring (CLIP Open-World Match)
+    if (
+      queryVector &&
+      Array.isArray(entry.embedding) &&
+      entry.embedding.length === queryVector.length
+    ) {
+      const sim = cosineSimilarity(queryVector, entry.embedding);
+      if (sim >= 0.20) {
+        // High semantic relevance: boost score proportional to similarity
+        const vectorPoints = Math.round((sim - 0.20) * 450);
+        score += vectorPoints;
+      }
+    }
+
     if (score > 0) {
       const match = { entry, score };
       if (topMatches.length < 15) {
@@ -356,11 +380,25 @@ export async function rankedSearch(rawQuery) {
 }
 
 export async function fastSearch(rawQuery, onProgressHit = null) {
-  const initialRanked = await rankedSearch(rawQuery);
-  if (initialRanked.length === 0) return null;
-
-  if (typeof onProgressHit === "function") {
-    onProgressHit(initialRanked);
+  if (!cacheLoaded || cachedEntries.length === 0) {
+    await refreshCache();
   }
-  return initialRanked;
+
+  // Instant lexical pass (0ms latency for speech/text)
+  const tokens = normalizeQuery(rawQuery);
+  if (tokens.length > 0) {
+    const initialHits = cachedEntries
+      .map((entry) => ({ entry, score: scoreEntry(entry, tokens) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => (b.score !== a.score ? b.score - a.score : b.entry.timestamp - a.entry.timestamp))
+      .slice(0, 15)
+      .map((item) => ({ ...item.entry, _score: item.score }));
+
+    if (initialHits.length > 0 && typeof onProgressHit === "function") {
+      onProgressHit(initialHits);
+    }
+  }
+
+  // Refined multimodal vector search
+  return await rankedSearch(rawQuery);
 }

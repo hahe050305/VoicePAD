@@ -31,7 +31,7 @@ function hasPlateLikeText(text) {
     let candidate = "";
     for (let count = 0; count < 5 && start + count < tokens.length; count++) {
       candidate += tokens[start + count];
-      if (candidate.length > 12) break;
+      if (candidate.length > 14) break;
       if (
         candidate.length >= 6 &&
         (candidate.match(/[A-Z]/g) || []).length >= 2 &&

@@ -80,10 +80,19 @@ const semanticPatterns = [
   { pattern: /\b(todo|to-do|to\s*do|follow(\s*|-)?up)\b/, tags: ["#reminder"] },
   { pattern: /\b(meeting|appointment\s*at)\b/, tags: ["#reminder"] },
 
-  // ── Shopping & E-Commerce ─────────────────────────────────────────────────
-  { pattern: /\b(order\s*placed|order\s*confirmed|tracking\s*id|delivery\s*partner)\b/, tags: ["#shopping"] },
+  // ── Shopping & E-Commerce & Brands ───────────────────────────────────────
+  { pattern: /\b(order\s*placed|order\s*confirmed|tracking\s*id|delivery\s*partner|awb|shipment)\b/, tags: ["#shopping", "#delivery"] },
   { pattern: /\b(amazon|flipkart|myntra|swiggy|zomato|blinkit|zepto|instamart)\b/, tags: ["#shopping"] },
   { pattern: /\b(grocery|vegetables|fruits|supermarket)\b/, tags: ["#shopping", "#grocery"] },
+  { pattern: /\b(nike|adidas|puma|reebok|under\s*armour|zara|h&m|levi'?s)\b/, tags: ["#shopping", "#fashion"] },
+  { pattern: /\b(apple|iphone|ipad|macbook|airpods|watch\s*series|sony|samsung|galaxy|bose|jbl|boat|marshall|oneplus|xiaomi|realme|logitech)\b/, tags: ["#electronics", "#tech"] },
+  { pattern: /\b(starbucks|mcdonald'?s|kfc|domino'?s|pizza\s*hut|burger\s*king|subway|cafe|coffee\s*day)\b/, tags: ["#food", "#cafe"] },
+
+  // ── Extended Medical & Dosage Mining ─────────────────────────────────────
+  { pattern: /\b(\d+\s*mg|\d+\s*ml|paracetamol|ibuprofen|amoxicillin|cetirizine|azithromycin|metformin|pantoprazole|syrup|ointment|capsules?|tablets?)\b/, tags: ["#health", "#medicine"] },
+
+  // ── Extended Invoice & Receipt Mining ────────────────────────────────────
+  { pattern: /\b(gstin|subtotal|grand\s*total|invoice\s*no|amount\s*paid|cash\s*receipt|sales\s*receipt|pos\s*receipt)\b/, tags: ["#bill", "#receipt", "#finance"] },
 ];
 
 // Words that should NOT trigger random generic tags when occurring inside OCR text
