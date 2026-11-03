@@ -2,7 +2,7 @@
 // Semantic intent tagger — understands natural-language phrasing beyond strict key lookup.
 // Fully local/offline. No external APIs.
 
-import aliasMap from "./aliasMap.json";
+import aliasMap from "./aliasMap.json" with { type: "json" };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. PATTERN-BASED SEMANTIC RULES
@@ -76,9 +76,16 @@ const semanticPatterns = [
   { pattern: /\b(hotel|hostel|resort|check-?in|booking\s*id)\b/, tags: ["#travel"] },
 
   // ── Reminders & Tasks ────────────────────────────────────────────────────
-  { pattern: /\b(remind|reminder|remember|don't\s*forget|memo)\b/, tags: ["#reminder"] },
+  { pattern: /\b(remind|reminder|remember|don't\s*forget|memo|tmrw|tomorrow|today|tonight|yesterday)\b/, tags: ["#reminder"] },
   { pattern: /\b(todo|to-do|to\s*do|follow(\s*|-)?up)\b/, tags: ["#reminder"] },
   { pattern: /\b(meeting|appointment\s*at)\b/, tags: ["#reminder"] },
+
+  // ── Sports, Matches & Games ──────────────────────────────────────────────
+  { pattern: /\b(cricket|football|soccer|tennis|badminton|volleyball|basketball|hockey|baseball|sports?)\b/, tags: ["#sports"] },
+  { pattern: /\b(cricket\s*match|football\s*match|match|tournament|game|ipl|fifa|world\s*cup)\b/, tags: ["#sports", "#event"] },
+
+  // ── Signatures & Authorization ───────────────────────────────────────────
+  { pattern: /\b(signature|sign|signatures|autograph|signed|sign-off|signoff)\b/, tags: ["#signature", "#document"] },
 
   // ── Shopping & E-Commerce & Brands ───────────────────────────────────────
   { pattern: /\b(order\s*placed|order\s*confirmed|tracking\s*id|delivery\s*partner|awb|shipment)\b/, tags: ["#shopping", "#delivery"] },

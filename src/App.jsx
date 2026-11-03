@@ -809,7 +809,7 @@ export default function App() {
               <span className="text-indigo-400 font-medium">
                 {filteredEntries.length}
               </span>{" "}
-              match{filteredEntries.length !== 1 ? "es" : ""} for "{query}"
+              {filteredEntries.length === 1 ? "best match" : "matches (high to low)"} for "{query}"
             </p>
           )}
         </form>
@@ -865,7 +865,7 @@ export default function App() {
                   {filteredEntries.length > 1 ? `Your Photos (${filteredEntries.length})` : "Top Voice Match"}
                 </>
               ) : query.trim() ? (
-                "Best Matches"
+                filteredEntries.length === 1 ? "Best Match" : "Best Matches (High to Low)"
               ) : (
                 `Stored Memories (${allEntries.length})`
               )}
@@ -879,7 +879,7 @@ export default function App() {
                   Show all memories
                 </button>
               ) : query.trim() ? (
-                `${filteredEntries.length} results`
+                filteredEntries.length === 1 ? "1 result" : `${filteredEntries.length} results (ranked)`
               ) : (
                 "Auto-Indexed"
               )}

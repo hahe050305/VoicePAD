@@ -168,7 +168,6 @@
   "credit": "#finance",
   "debit": "#finance",
   "loan": "#finance",
-  "emi": "#finance",
   "tax": "#finance",
   "gst": "#finance",
   "income": "#finance",
@@ -227,7 +226,24 @@
   "blurred": "#photo",
   "blur": "#photo",
   "capture": "#photo",
-  "receipt": "#bill",
-  "invoice": "#bill",
-  "bill": "#bill"
+
+  "sign": "#signature",
+  "signature": "#signature",
+  "signatures": "#signature",
+  "autograph": "#signature",
+  "signed": "#signature",
+
+  "cricket": "#sports",
+  "match": "#sports",
+  "sports": "#sports",
+  "game": "#sports",
+  "football": "#sports",
+  "soccer": "#sports",
+  "tennis": "#sports",
+  "badminton": "#sports",
+  "hockey": "#sports",
+  "tournament": "#sports",
+
+  "tmrw": "#reminder",
+  "tomorrow": "#reminder"
 }

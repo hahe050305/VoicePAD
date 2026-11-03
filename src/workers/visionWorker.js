@@ -115,11 +115,13 @@ const VISUAL_CATEGORIES = [
   { prompt: "a photo of house keys or car keys", tags: ["#keys"] },
   { prompt: "a photo of a wallet or purse", tags: ["#wallet"] },
   { prompt: "a photo of clothes, shirt, jacket, or apparel", tags: ["#clothing"] },
-  { prompt: "a photo of a book, notebook, or diary", tags: ["#book", "#notes"] },
+  { prompt: "a photo of a book, textbook, novel, or thick bound notebook", tags: ["#book", "#notes"] },
 
-  // Paper & Documents
-  { prompt: "a photo of a cash receipt or store invoice bill", tags: ["#receipt", "#bill"] },
-  { prompt: "a photo of an official printed paper document or certificate", tags: ["#document"] },
+  // Paper, Documents & Signatures
+  { prompt: "a photo of a handwritten signature, sign, or autograph on a piece of paper", tags: ["#signature", "#document"] },
+  { prompt: "a photo of handwriting or handwritten note on paper", tags: ["#notes", "#document"] },
+  { prompt: "a photo of a printed cash receipt, store invoice bill, or payment slip with prices and numbers", tags: ["#receipt", "#bill"] },
+  { prompt: "a photo of an official printed paper document, ID card, or certificate", tags: ["#document"] },
 
   // People & Nature
   { prompt: "a photo of a human hand holding an item", tags: ["#hand"] },
@@ -181,7 +183,7 @@ function extractVisualTags(imageEmbedding, candidateEmbeddings, threshold = 0.22
   const tags = new Set();
 
   for (const item of scored) {
-    if (item.score >= threshold && item.score >= topScore - 0.05) {
+    if (item.score >= threshold && item.score >= topScore - 0.03) {
       for (const t of item.tags) {
         if (tags.size < 4) tags.add(t);
       }

@@ -1,6 +1,6 @@
 // src/search.js
 import { db } from "./db.js";
-import aliasMap from "./aliasMap.json";
+import aliasMap from "./aliasMap.json" with { type: "json" };
 import { deriveTags } from "./tagger.js";
 import { isPureImageText } from "./ocr.js";
 import { embedText } from "./services/visionService.js";
@@ -27,8 +27,18 @@ const STOP_WORDS = new Set([
 const CATEGORY_TAGS = new Set([
   "#vehicle", "#document", "#contact", "#travel", "#bill", "#health", "#finance",
   "#shopping", "#security", "#reminder", "#photo", "#image", "#picture",
+  "#signature", "#sports", "#event",
 ]);
 const TERM_SYNONYMS = {
+  sign: ["sign", "signature", "autograph", "signed"],
+  signature: ["signature", "sign", "autograph", "signed"],
+  autograph: ["autograph", "signature", "sign"],
+  cricket: ["cricket", "match", "sports", "game"],
+  match: ["match", "cricket", "game", "sports", "tournament"],
+  sport: ["sport", "sports", "game", "match", "cricket"],
+  sports: ["sports", "sport", "game", "match", "cricket"],
+  tmrw: ["tmrw", "tomorrow", "reminder"],
+  tomorrow: ["tomorrow", "tmrw", "reminder"],
   bike: ["bike", "motorcycle", "bicycle", "scooty", "scooter", "twowheeler"],
   bicycle: ["bicycle", "bike", "cycle"],
   cycle: ["bicycle", "cycle"],
@@ -349,9 +359,11 @@ export async function rankedSearch(rawQuery) {
       entry.embedding.length === queryVector.length
     ) {
       const sim = cosineSimilarity(queryVector, entry.embedding);
-      if (sim >= 0.20) {
-        // High semantic relevance: boost score proportional to similarity
-        const vectorPoints = Math.round((sim - 0.20) * 450);
+      // If there's already lexical/tag relevance (score > 0), boost with moderate sim >= 0.20.
+      // If purely visual discovery (score === 0), require higher confidence sim >= 0.25 to prevent false matches.
+      const threshold = score > 0 ? 0.20 : 0.25;
+      if (sim >= threshold) {
+        const vectorPoints = Math.round((sim - threshold) * 450);
         score += vectorPoints;
       }
     }
@@ -376,7 +388,36 @@ export async function rankedSearch(rawQuery) {
     }
   }
 
-  return topMatches.map((item) => ({ ...item.entry, _score: item.score }));
+  const scoredMatches = topMatches.map((item) => ({ ...item.entry, _score: item.score }));
+  return filterBestOrSimilarMatches(scoredMatches);
+}
+
+/**
+ * Filters search results to show only the best match unless other matches have similar confidence,
+ * in which case they are shown ranked from high to low scoring.
+ */
+export function filterBestOrSimilarMatches(matches) {
+  if (!matches || matches.length === 0) return [];
+
+  // Sort strictly high-to-low by score (and descending timestamp on ties)
+  const sorted = [...matches].sort((a, b) => {
+    const sA = a._score ?? a.score ?? 0;
+    const sB = b._score ?? b.score ?? 0;
+    if (sB !== sA) return sB - sA;
+    const tA = a.entry?.timestamp ?? a.timestamp ?? 0;
+    const tB = b.entry?.timestamp ?? b.timestamp ?? 0;
+    return tB - tA;
+  });
+
+  const topScore = sorted[0]._score ?? sorted[0].score ?? 0;
+  if (topScore <= 0) return [];
+
+  // Similar confidence threshold: matches within 20% of the top score (and above baseline of 25)
+  const SIMILAR_CONFIDENCE_RATIO = 0.80;
+  const MIN_SCORE = 25;
+  const cutoff = Math.max(MIN_SCORE, topScore * SIMILAR_CONFIDENCE_RATIO);
+
+  return sorted.filter((item) => (item._score ?? item.score ?? 0) >= cutoff);
 }
 
 export async function fastSearch(rawQuery, onProgressHit = null) {
@@ -387,12 +428,13 @@ export async function fastSearch(rawQuery, onProgressHit = null) {
   // Instant lexical pass (0ms latency for speech/text)
   const tokens = normalizeQuery(rawQuery);
   if (tokens.length > 0) {
-    const initialHits = cachedEntries
+    const rawHits = cachedEntries
       .map((entry) => ({ entry, score: scoreEntry(entry, tokens) }))
       .filter((item) => item.score > 0)
-      .sort((a, b) => (b.score !== a.score ? b.score - a.score : b.entry.timestamp - a.entry.timestamp))
-      .slice(0, 15)
-      .map((item) => ({ ...item.entry, _score: item.score }));
+      .sort((a, b) => (b.score !== a.score ? b.score - a.score : b.entry.timestamp - a.entry.timestamp));
+
+    const initialHits = filterBestOrSimilarMatches(rawHits)
+      .map((item) => ({ ...(item.entry || item), _score: item.score ?? item._score }));
 
     if (initialHits.length > 0 && typeof onProgressHit === "function") {
       onProgressHit(initialHits);
