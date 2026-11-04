@@ -146,11 +146,11 @@ The journey to making VoicePad truly "see" and connect with voice commands was t
 
 #### OCR Architecture: Native Android ML Kit + Tesseract WASM
 
-Heavy Tesseract.js running on the main UI thread (taking 4–7 seconds per image and freezing tabs).
+Heavy Tesseract.js running on the main UI thread freezes the app while processing multiple images at once.
 
 * **The Transition**:
 
-  * **On Native Android**: Integrated Google’s **ML Kit Text Recognition (`@capacitor-mlkit/text-recognition`)**, slashing OCR latency to under 150ms.
+  * **On Native Android**: Integrated Google’s **ML Kit Text Recognition (`@capacitor-mlkit/text-recognition`)**, slashing OCR latency.
 
   * **On Web**: Isolated Tesseract.js in a dedicated Web Worker (`ocrWorker.js`) using WebAssembly.
 
@@ -160,9 +160,9 @@ Heavy Tesseract.js running on the main UI thread (taking 4–7 seconds per image
 
 Standard speech recognition waiting for full pause and speech end.
 
-* **The Problem**: A 2-second delay after speaking ruined the feeling of instant retrieval.
+* **The Problem**: A few seconds delay after speaking ruined the feeling of instant retrieval.
 
-* **The Transition**: Decoupled voice transcription from the search bar, enabled `interimResults = true`, and attached a **60ms debounce window**. As you speak, streaming phonemes hit an in-memory `fastSearch` index with instant first-hit callbacks (~300–400ms response).
+* **The Transition**: Decoupled voice transcription from the search bar, enabled `interimResults = true`. As you speak, streaming phonemes hit an in-memory `fastSearch` index with instant first-hit callbacks and a quick response.
 
 ---
 
@@ -221,7 +221,7 @@ Standard speech recognition waiting for full pause and speech end.
 
   * Implemented non-blocking **background model pre-warming** (`prewarmVisionModel`, `prewarmOCR`): models compile silently after the feed has mounted.
 
-  * Built an idle teardown watchdog: if no inference occurs for 30+ seconds, model buffers are released to keep device thermals and RAM usage minimal.
+  * Built an idle teardown watchdog: if no inference occurs, model buffers are released to keep device thermals and RAM usage minimal.
 
 ---
 
