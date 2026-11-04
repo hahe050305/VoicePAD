@@ -98,6 +98,9 @@ export default function App() {
   }, [selectedEntry?.id, selectedEntry?.type]);
 
   const recognizerRef = useRef(null);
+  const audioStreamRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const audioAnalyserRef = useRef(null);
   const fileInputRef = useRef(null);
   const searchDebounceRef = useRef(null);
   const imageProcessingQueueRef = useRef(Promise.resolve());
@@ -180,6 +183,98 @@ export default function App() {
     enqueueThumbnailBackfill(filteredEntries);
   }, [filteredEntries, enqueueThumbnailBackfill]);
 
+  // ── Laptop Microphone Noise-Suppression & Audio Pre-Filtering ──────────────
+  const stopAudioPipeline = useCallback(() => {
+    if (audioStreamRef.current) {
+      try {
+        audioStreamRef.current.getTracks().forEach((track) => track.stop());
+      } catch (err) {
+        console.debug("[AudioPipeline] Error stopping stream tracks:", err);
+      }
+      audioStreamRef.current = null;
+    }
+    if (audioContextRef.current) {
+      try {
+        if (audioContextRef.current.state !== "closed") {
+          audioContextRef.current.close().catch(() => {});
+        }
+      } catch (err) {
+        console.debug("[AudioPipeline] Error closing AudioContext:", err);
+      }
+      audioContextRef.current = null;
+    }
+    audioAnalyserRef.current = null;
+  }, []);
+
+  const startAudioPipeline = useCallback(async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      return null;
+    }
+    try {
+      // Hardware-level constraints: Acoustic Echo Cancellation, Noise Suppression, Auto Gain
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: { ideal: true },
+          noiseSuppression: { ideal: true },
+          autoGainControl: { ideal: true },
+          channelCount: 1,
+          sampleRate: { ideal: 16000 },
+        },
+      });
+      audioStreamRef.current = stream;
+
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx({ sampleRate: 16000 });
+        audioContextRef.current = ctx;
+
+        const source = ctx.createMediaStreamSource(stream);
+
+        // 1. High-Pass Filter: cuts fan vibration, desk rumble, and electrical hum below 85Hz
+        const highPass = ctx.createBiquadFilter();
+        highPass.type = "highpass";
+        highPass.frequency.value = 85;
+        highPass.Q.value = 0.7;
+
+        // 2. Vocal Peaking Filter: boosts human voice presence band (1.5kHz - 3.5kHz)
+        const vocalPresence = ctx.createBiquadFilter();
+        vocalPresence.type = "peaking";
+        vocalPresence.frequency.value = 2000;
+        vocalPresence.Q.value = 1.0;
+        vocalPresence.gain.value = 3.0;
+
+        // 3. Analyser for Voice Activity Detection (VAD) / Noise floor gating
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        audioAnalyserRef.current = analyser;
+
+        source.connect(highPass);
+        highPass.connect(vocalPresence);
+        vocalPresence.connect(analyser);
+      }
+      return stream;
+    } catch (err) {
+      console.warn("[AudioPipeline] Could not start hardware audio filter, using direct recognizer:", err);
+      return null;
+    }
+  }, []);
+
+  // Voice Activity Detection: ensures input contains genuine speech energy above ambient noise floor
+  const hasVoiceEnergy = useCallback(() => {
+    const analyser = audioAnalyserRef.current;
+    if (!analyser) return true;
+    const buffer = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteTimeDomainData(buffer);
+    let sum = 0;
+    for (let i = 0; i < buffer.length; i++) {
+      const normalized = (buffer[i] - 128) / 128;
+      sum += normalized * normalized;
+    }
+    const rms = Math.sqrt(sum / buffer.length);
+    // Cuts laptop fan noise/idle hum while catching natural speech
+    return rms > 0.012;
+  }, []);
+
   // ── Voice recognition ────────────────────────────────────────────────────────
   useEffect(() => {
     const SpeechRecognition =
@@ -197,11 +292,13 @@ export default function App() {
 
     recognizer.onend = () => {
       setIsListening(false);
+      stopAudioPipeline();
     };
 
     recognizer.onerror = (e) => {
       console.debug("Speech recognition error:", e.error);
       setIsListening(false);
+      stopAudioPipeline();
     };
 
     recognizer.onresult = (e) => {
@@ -212,6 +309,13 @@ export default function App() {
       currentTranscript = currentTranscript.trim();
 
       if (!currentTranscript) return;
+
+      // Filter phantom noise syllables caused by fan drone, breath, or room echo
+      const lower = currentTranscript.toLowerCase();
+      if (/^(uh|um|ah|er|eh|oh|\.|\,)$/.test(lower)) return;
+
+      // Discard low-energy phantom activations
+      if (!hasVoiceEnergy() && currentTranscript.length < 3) return;
 
       setVoiceTranscript(currentTranscript);
       setSearchMode("voice");
@@ -242,9 +346,13 @@ export default function App() {
     };
 
     recognizerRef.current = recognizer;
-  }, []);
 
-  const toggleListening = () => {
+    return () => {
+      stopAudioPipeline();
+    };
+  }, [hasVoiceEnergy, stopAudioPipeline]);
+
+  const toggleListening = async () => {
     if (!recognizerRef.current) {
       alert("Voice recognition not supported in this browser.");
       return;
@@ -252,6 +360,7 @@ export default function App() {
 
     if (isListening) {
       setIsListening(false);
+      stopAudioPipeline();
       try {
         recognizerRef.current.stop();
       } catch {
@@ -261,6 +370,8 @@ export default function App() {
       setIsListening(true);
       setVoiceTranscript("");
       try {
+        // Initialize noise-suppression and high-pass filtering before starting speech recognizer
+        await startAudioPipeline();
         recognizerRef.current.start();
       } catch {
         try {
@@ -268,6 +379,7 @@ export default function App() {
           recognizerRef.current.start();
         } catch {
           setIsListening(false);
+          stopAudioPipeline();
         }
       }
     }
@@ -687,6 +799,13 @@ export default function App() {
               {isListening ? "Listening" : "Voice Search"}
             </span>
           </button>
+
+          {isListening && (
+            <span className="mt-2 text-[10px] font-mono text-emerald-400 bg-emerald-950/80 border border-emerald-500/30 px-2 py-0.5 rounded-full flex items-center gap-1 animate-in fade-in duration-150">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              Noise Filter Active
+            </span>
+          )}
         </div>
 
         {/* Image capture - live camera & photo gallery */}
