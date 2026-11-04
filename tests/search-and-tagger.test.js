@@ -55,3 +55,20 @@ test("filterBestOrSimilarMatches returns all similar confidence matches ordered 
   assert.ok(filtered[0]._score >= filtered[1]._score);
   assert.ok(filtered[1]._score >= filtered[2]._score);
 });
+
+test("deriveTags detects event badge and conference tags for participant passes", () => {
+  const tags = deriveTags("HackerRank Orchestrate OCTOBER EDITION HARISH JHR I AM ATTENDING PARTICIPANT");
+  assert.ok(tags.includes("#event"), "Should include #event");
+  assert.ok(tags.includes("#ticket"), "Should include #ticket");
+  assert.ok(tags.includes("#badge"), "Should include #badge");
+  assert.equal(tags.includes("#vehicle"), false, "Should NOT detect #vehicle");
+});
+
+test("deriveTags detects tech company branding and does not hallucinate receipts", () => {
+  const tags = deriveTags("dci Dot Com Infoway");
+  assert.ok(tags.includes("#tech"), "Should include #tech");
+  assert.ok(tags.includes("#company"), "Should include #company");
+  assert.equal(tags.includes("#receipt"), false, "Should NOT detect #receipt");
+  assert.equal(tags.includes("#bill"), false, "Should NOT detect #bill");
+  assert.equal(tags.includes("#vehicle"), false, "Should NOT detect #vehicle");
+});

@@ -8,16 +8,19 @@ import aliasMap from "./aliasMap.json" with { type: "json" };
 // 1. PATTERN-BASED SEMANTIC RULES
 // ─────────────────────────────────────────────────────────────────────────────
 const semanticPatterns = [
-  // ── Movies, Entertainment & Events ───────────────────────────────────────
+  // ── Movies, Entertainment, Badges & Events ────────────────────────────────
   { pattern: /\b(bookmyshow|movie|cinema|multiplex|pvr|inox|cinepolis|theatre|theater|imax)\b/, tags: ["#entertainment", "#movie", "#ticket"] },
   { pattern: /\b(ticket|tickets|seat\s*[a-z]?\d+|audi\s*\d+|screen\s*\d+|show\s*time)\b/, tags: ["#ticket"] },
   { pattern: /\b(concert|live\s*show|standup|comedy|gig|festival)\b/, tags: ["#entertainment", "#event"] },
+  { pattern: /\b(hackerrank|orchestrate|attendee|attending|participant|conference|summit|hackathon|webinar|symposium|expo|badge|event\s*pass|lanyard)\b/, tags: ["#event", "#ticket", "#badge"] },
+  { pattern: /\b(halloween|ghost|pumpkin|spooky|autumn)\b/, tags: ["#festival", "#event", "#celebration"] },
 
   // ── Vehicles & Transport (strict word boundary, ignore ticket seats/codes) ─
   { pattern: /\b(my\s+)?(bike|motorcycle|scooty|scooter|car|automobile|moped|auto\s+rickshaw|truck|bus)\b/, tags: ["#vehicle"] },
   { pattern: /\b(parked|parking)\s+(my|the)?\s*(car|bike|vehicle|scooter|spot|slot)?\b/, tags: ["#parking", "#vehicle"] },
   { pattern: /\b(fuel|petrol|diesel|cng)\s+(filled|pump|bill|receipt)?\b/, tags: ["#fuel", "#vehicle"] },
-  { pattern: /\b(license\s*plate|registration\s*plate|rc\s*book|rc\s*card)\b/, tags: ["#vehicle", "#document"] },
+  { pattern: /\b(license\s*plate|registration\s*plate|number\s*plate|vehicle\s*plate)\b/, tags: ["#vehicle"] },
+  { pattern: /\b(rc\s*book|rc\s*card)\b/, tags: ["#vehicle", "#document"] },
 
   // ── Gadgets & Tech ───────────────────────────────────────────────────────
   { pattern: /\b(laptop|macbook|thinkpad|notebook|computer|pc|desktop)\b/, tags: ["#electronics", "#tech", "#laptop"] },
@@ -33,6 +36,7 @@ const semanticPatterns = [
   { pattern: /\b(christmas|xmas|new\s*year|eid|holi)\b/, tags: ["#festival", "#celebration"] },
 
   // ── Photos & Selfies ──────────────────────────────────────────────────────
+  { pattern: /\b(photo|picture|pic|pics|portrait|snap|camera\s*roll|stock\s*photo)\b/, tags: ["#photo"] },
   { pattern: /\b(selfie|my\s+face|photo\s+of\s+me|my\s+selfie)\b/, tags: ["#photo", "#selfie"] },
 
   // ── Security / Credentials ────────────────────────────────────────────────
@@ -94,6 +98,10 @@ const semanticPatterns = [
   { pattern: /\b(nike|adidas|puma|reebok|under\s*armour|zara|h&m|levi'?s)\b/, tags: ["#shopping", "#fashion"] },
   { pattern: /\b(apple|iphone|ipad|macbook|airpods|watch\s*series|sony|samsung|galaxy|bose|jbl|boat|marshall|oneplus|xiaomi|realme|logitech)\b/, tags: ["#electronics", "#tech"] },
   { pattern: /\b(starbucks|mcdonald'?s|kfc|domino'?s|pizza\s*hut|burger\s*king|subway|cafe|coffee\s*day)\b/, tags: ["#food", "#cafe"] },
+  { pattern: /\b(dot\s*com\s*infoway|dci|infoway|technologies|solutions|consultancy|software\s*solutions)\b/, tags: ["#tech", "#company", "#brand"] },
+
+  // ── Contacts & Communication ─────────────────────────────────────────────
+  { pattern: /\b(phone\s*number|mobile\s*number|contact\s*no|contact\s*number|cell\s*number)\b/, tags: ["#contact"] },
 
   // ── Extended Medical & Dosage Mining ─────────────────────────────────────
   { pattern: /\b(\d+\s*mg|\d+\s*ml|paracetamol|ibuprofen|amoxicillin|cetirizine|azithromycin|metformin|pantoprazole|syrup|ointment|capsules?|tablets?)\b/, tags: ["#health", "#medicine"] },

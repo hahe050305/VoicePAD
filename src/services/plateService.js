@@ -6,12 +6,17 @@ const VALID_INDIAN_STATES = new Set([
   "OD", "PB", "PY", "RJ", "SK", "TN", "TR", "TS", "UK", "UP", "WB"
 ]);
 
-// Negative keywords that frequently appear in movie tickets, bills, documents, or apps
+// Negative keywords that frequently appear in movie tickets, bills, documents, badges, or apps
 // that should never be parsed as vehicle plates
 const NON_VEHICLE_KEYWORDS = [
   "BOOKMYSHOW", "CINEMA", "TICKET", "SCREEN", "SEAT", "AUDI", "SHOW",
   "INVOICE", "ORDER", "PAYMENT", "TRANSACTION", "RECEIPT", "BILL", "REFUND",
-  "FLIPKART", "AMAZON", "SWIGGY", "ZOMATO", "COUPON", "VOUCHER", "VALID", "EXPIRES"
+  "FLIPKART", "AMAZON", "SWIGGY", "ZOMATO", "COUPON", "VOUCHER", "VALID", "EXPIRES",
+  "HACKERRANK", "ORCHESTRATE", "ATTENDING", "PARTICIPANT", "ATTENDEE", "CONFERENCE",
+  "HACKATHON", "EDITION", "SPEAKER", "DELEGATE", "ORGANIZER", "BADGE", "INVITATION",
+  "WELCOME", "DOT COM", "INFOWAY", "TECHNOLOGY", "TECHNOLOGIES", "SOLUTIONS", "COMPANY",
+  "PVT", "LTD", "LIMITED", "CAFE", "COFFEE", "RESTAURANT", "MENU", "HOTEL", "RESORT",
+  "HOMESTAY", "LOVE", "PEACE", "HAPPY", "BIRTHDAY", "FESTIVAL", "CELEBRATION"
 ];
 
 const BH_PLATE_PATTERN = /\b\d{2}\s*BH\s*\d{4}\s*[A-Z]{1,2}\b/;
@@ -36,7 +41,6 @@ const DIGIT_ALTERNATIVES = {
   Z: ["2"],
   S: ["5"],
   G: ["6"],
-  A: ["4"],
 };
 
 export function formatPlate(value) {
@@ -103,32 +107,51 @@ function findStandardPlate(rawStr) {
     if (upper.includes(kw)) return null;
   }
 
-  // Find candidate words or compact tokens that actually match a plate structure
-  // Indian plate tokens: state (2 letters) + district (1-2 digits) + series (0-3 letters) + serial (3-4 digits)
-  // Supports single-line (e.g. 22 BH 6517 A) and 2-line plates (e.g. BR01C / J6440)
-  const tokens = upper.match(/[A-Z0-9]{6,12}/g) || [];
+  const lines = upper
+    .split(/[\r\n]+/)
+    .map((l) => l.trim())
+    .filter(Boolean);
 
-  // Build candidate combinations from space- or newline-separated words
-  const rawWords = upper.replace(/[^A-Z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
-  for (let i = 0; i < rawWords.length; i++) {
-    let combo = "";
-    for (let j = i; j < Math.min(rawWords.length, i + 5); j++) {
-      combo += rawWords[j];
-      if (combo.length >= 8 && combo.length <= 14) {
-        tokens.push(combo);
-        if (combo.startsWith("IND") && combo.length >= 11) {
-          tokens.push(combo.slice(3));
+  const tokens = [];
+
+  // 1. Single standalone compact tokens: e.g. KA01AB1234, TN-59-AX-2332
+  const singleTokens = upper.match(/[A-Z0-9]{8,12}/g) || [];
+  for (const st of singleTokens) {
+    tokens.push(st);
+    if (st.startsWith("IND") && st.length >= 11) {
+      tokens.push(st.slice(3));
+    }
+  }
+
+  // 2. Intra-line word combinations: only combine adjacent words on the SAME line
+  for (const line of lines) {
+    const lineWords = line.replace(/[^A-Z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+    // Real plates on one line have 2 to 4 compact chunks (e.g., ["TN", "59", "AX", "2332"])
+    if (lineWords.length >= 2 && lineWords.length <= 5) {
+      for (let i = 0; i < lineWords.length; i++) {
+        let combo = "";
+        for (let j = i; j < Math.min(lineWords.length, i + 4); j++) {
+          combo += lineWords[j];
+          if (combo.length >= 8 && combo.length <= 11) {
+            tokens.push(combo);
+            if (combo.startsWith("IND") && combo.length >= 11) {
+              tokens.push(combo.slice(3));
+            }
+          }
         }
       }
     }
   }
 
-  // Also include entire alphanumeric text if length is right
-  const fullCompact = upper.replace(/[^A-Z0-9]/g, "");
-  if (fullCompact.length >= 8 && fullCompact.length <= 14) {
-    tokens.push(fullCompact);
-    if (fullCompact.startsWith("IND")) {
-      tokens.push(fullCompact.slice(3));
+  // 3. Two-line plates: e.g. Line 1: "BR 01 C", Line 2: "J 6440" or Line 1: "TN 59", Line 2: "AX 2332"
+  for (let i = 0; i < lines.length - 1; i++) {
+    const top = lines[i].replace(/[^A-Z0-9]/g, "");
+    const bottom = lines[i + 1].replace(/[^A-Z0-9]/g, "");
+    if (top.length >= 3 && top.length <= 5 && bottom.length >= 4 && bottom.length <= 7) {
+      const combined = `${top}${bottom}`;
+      if (combined.length >= 8 && combined.length <= 11) {
+        tokens.push(combined);
+      }
     }
   }
 
@@ -138,10 +161,16 @@ function findStandardPlate(rawStr) {
     const compact = token.replace(/[^A-Z0-9]/g, "");
     if (compact.length < 8 || compact.length > 11) continue;
 
+    // Genuine Indian plates contain at least 3 actual numeric digits in the raw text
+    const rawDigits = (compact.match(/\d/g) || []).length;
+    if (rawDigits < 3) continue;
+
     const state = findState(compact.slice(0, 2));
     if (!state) continue;
 
-    for (const districtLength of [2, 1]) {
+    const districtLengths = state === "DL" ? [2, 1] : [2];
+
+    for (const districtLength of districtLengths) {
       const districtStart = 2;
       const districtSlice = compact.slice(districtStart, districtStart + districtLength);
       const districtCandidates = expandDigitSequences(districtSlice);
@@ -157,47 +186,36 @@ function findStandardPlate(rawStr) {
           if (series.length !== seriesLength || !/^[A-Z]{0,3}$/.test(series)) continue;
 
           const rawSerial = compact.slice(serialStart, serialStart + serialLength);
+          // If serial is 3 digits, all 3 characters must be genuine digits
+          if (serialLength === 3 && !/^\d{3}$/.test(rawSerial)) continue;
+
           const serialCandidates = expandDigitSequences(rawSerial);
           if (serialCandidates.length === 0) continue;
+
+          // Must have at least 2 actual digits in the raw serial
+          const rawSerialDigits = (rawSerial.match(/\d/g) || []).length;
+          if (rawSerialDigits < 2) continue;
 
           for (const district of districtCandidates) {
             for (const serial of serialCandidates) {
               const value = `${state}${district}${series}${serial}`;
               let score = 0;
-              score += seriesLength === 2 ? 10 : seriesLength === 1 ? 6 : 2;
-              score += districtLength === 2 ? 5 : 2;
-              score += serialLength === 4 ? 6 : 2;
+              score += seriesLength === 2 ? 12 : seriesLength === 1 ? 8 : 4;
+              score += districtLength === 2 ? 6 : 3;
+              score += serialLength === 4 ? 8 : 4;
 
-              for (let i = 0; i < rawSerial.length; i++) {
-                if (rawSerial[i] === serial[i]) score += 3;
-                else if (rawSerial[i] === 'L' && serial[i] === '4') score += 2.5;
-                else if (rawSerial[i] === 'B' && serial[i] === '6') score += 2.5;
+              for (let idx = 0; idx < rawSerial.length; idx++) {
+                if (rawSerial[idx] === serial[idx]) score += 3;
+                else if (rawSerial[idx] === 'L' && serial[idx] === '4') score += 2;
+                else if (rawSerial[idx] === 'B' && serial[idx] === '6') score += 2;
                 else score += 1;
               }
 
-              // Plates must score >= 20 and be a distinct token
-              if (score >= 20) {
+              if (score >= 22) {
                 candidates.set(value, Math.max(candidates.get(value) || 0, score));
               }
             }
           }
-        }
-      }
-    }
-  }
-
-  // Also support 2-row plates where state+district is on top line and series+serial on next line
-  const lines = upper.split(/[\r\n]+/).map((l) => l.replace(/[^A-Z0-9]/g, "").trim()).filter(Boolean);
-  for (let i = 0; i < lines.length - 1; i++) {
-    const top = lines[i];
-    const bottom = lines[i + 1];
-    if (top.length >= 3 && top.length <= 5 && bottom.length >= 4 && bottom.length <= 7) {
-      const combined = `${top}${bottom}`;
-      const state = findState(combined.slice(0, 2));
-      if (state) {
-        const res = formatPlate(combined);
-        if (res && res.split(" ").length >= 3) {
-          candidates.set(combined, 25);
         }
       }
     }

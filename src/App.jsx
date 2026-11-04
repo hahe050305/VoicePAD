@@ -535,7 +535,7 @@ export default function App() {
                 // Update the UI card immediately with OCR results as soon as ready
                 await syncCard({
                   ocr: currentOcrText,
-                  isPureImage: !currentPlate && structuredIds.length === 0 && currentOcrText.length === 0,
+                  isPureImage: !currentPlate && structuredIds.length === 0 && (currentOcrText.length === 0 || isPureImageText(currentOcrText)),
                   tags: ocrTags.length > 0 ? ocrTags : ["#photo"],
                 });
               } catch (ocrErr) {

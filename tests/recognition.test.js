@@ -42,6 +42,19 @@ test("does not accept an invalid state code as a registration plate", () => {
   assert.equal(parsePlateString("ZZ 59 AX 2332"), null);
 });
 
+test("does not detect false vehicle plates from event passes or noisy text", () => {
+  assert.equal(
+    parsePlateString("HackerRank Orchestrate OCTOBER EDITION HARISH JHR I AM ATTENDING PARTICIPANT"),
+    null
+  );
+  assert.equal(parsePlateString("dci Dot Com Infoway"), null);
+  assert.equal(parsePlateString("LO VE cafe photo"), null);
+  assert.equal(
+    parsePlateString("i \\ va 3 ie ; SE Ne ns BRS. ys Ar 22 Orchestrate a 'a JER Ty AE OCTOBER EDITION"),
+    null
+  );
+});
+
 test("classifies OCR text and empty results without throwing", () => {
   assert.equal(isPureImageText("Vehicle Plate: TN 59 AX 2332"), false);
   assert.equal(isPureImageText(""), true);

@@ -26,19 +26,22 @@ export function extractVehiclePlate(rawText) {
 }
 
 function hasPlateLikeText(text) {
-  const tokens = String(text || "").toUpperCase().match(/[A-Z0-9]+/g) || [];
-  for (let start = 0; start < tokens.length; start++) {
-    let candidate = "";
-    for (let count = 0; count < 5 && start + count < tokens.length; count++) {
-      candidate += tokens[start + count];
-      if (candidate.length > 14) break;
-      if (
-        candidate.length >= 6 &&
-        (candidate.match(/[A-Z]/g) || []).length >= 2 &&
-        (candidate.match(/\d/g) || []).length >= 3
-      ) {
-        return true;
-      }
+  if (!text) return false;
+  const upper = text.toUpperCase();
+  for (const kw of [
+    "BOOKMYSHOW", "CINEMA", "TICKET", "SCREEN", "SEAT", "INVOICE", "RECEIPT", "BILL",
+    "HACKERRANK", "ORCHESTRATE", "ATTENDING", "PARTICIPANT", "CONFERENCE", "BADGE",
+    "DOT COM", "INFOWAY", "CAFE", "COFFEE", "MENU", "LOVE", "FESTIVAL"
+  ]) {
+    if (upper.includes(kw)) return false;
+  }
+
+  const tokens = upper.match(/[A-Z0-9]{6,12}/g) || [];
+  for (const t of tokens) {
+    const letters = (t.match(/[A-Z]/g) || []).length;
+    const digits = (t.match(/\d/g) || []).length;
+    if (letters >= 2 && digits >= 3) {
+      return true;
     }
   }
   return false;

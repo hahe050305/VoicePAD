@@ -120,8 +120,15 @@ const VISUAL_CATEGORIES = [
   // Paper, Documents & Signatures
   { prompt: "a photo of a handwritten signature, sign, or autograph on a piece of paper", tags: ["#signature", "#document"] },
   { prompt: "a photo of handwriting or handwritten note on paper", tags: ["#notes", "#document"] },
-  { prompt: "a photo of a printed cash receipt, store invoice bill, or payment slip with prices and numbers", tags: ["#receipt", "#bill"] },
+  { prompt: "a photo of a paper retail cash receipt, store checkout invoice, or payment slip with price totals", tags: ["#receipt", "#bill"] },
   { prompt: "a photo of an official printed paper document, ID card, or certificate", tags: ["#document"] },
+
+  // Logos, Graphics & Branding
+  { prompt: "a digital graphic logo, company brand emblem, symbol, icon, or typography on a plain background", tags: ["#logo", "#brand", "#graphic"] },
+
+  // Badges, Events, Tickets & Illustrations
+  { prompt: "a photo of a conference badge, event pass, ticket, or participant lanyard card", tags: ["#badge", "#ticket", "#event"] },
+  { prompt: "a digital artwork, fantasy illustration, halloween painting, or artistic poster", tags: ["#artwork", "#illustration", "#event"] },
 
   // People & Nature
   { prompt: "a photo of a human hand holding an item", tags: ["#hand"] },
@@ -161,7 +168,7 @@ async function getCandidateEmbeddings(tokenizer, textModel) {
   return candidatePromptEmbeddings;
 }
 
-function extractVisualTags(imageEmbedding, candidateEmbeddings, threshold = 0.22) {
+function extractVisualTags(imageEmbedding, candidateEmbeddings, threshold = 0.235) {
   if (!imageEmbedding || !candidateEmbeddings || candidateEmbeddings.length === 0) return [];
   const scored = [];
   for (let i = 0; i < VISUAL_CATEGORIES.length; i++) {
@@ -183,12 +190,35 @@ function extractVisualTags(imageEmbedding, candidateEmbeddings, threshold = 0.22
   const tags = new Set();
 
   for (const item of scored) {
-    if (item.score >= threshold && item.score >= topScore - 0.03) {
+    if (item.score >= threshold && item.score >= topScore - 0.025) {
       for (const t of item.tags) {
         if (tags.size < 4) tags.add(t);
       }
     }
     if (tags.size >= 3) break;
+  }
+
+  // Cross-category semantic disambiguation:
+  // 1. If photo is primarily of a person, don't label as a paper document or receipt
+  if (tags.has("#person")) {
+    tags.delete("#document");
+    tags.delete("#receipt");
+    tags.delete("#bill");
+  }
+
+  // 2. If photo is a brand logo or vector graphic, don't label as a receipt or document or vehicle
+  if (tags.has("#logo") || tags.has("#brand") || tags.has("#graphic")) {
+    tags.delete("#receipt");
+    tags.delete("#bill");
+    tags.delete("#document");
+    tags.delete("#vehicle");
+  }
+
+  // 3. If artwork / illustration, don't label as receipt / bill / vehicle
+  if (tags.has("#artwork") || tags.has("#illustration")) {
+    tags.delete("#receipt");
+    tags.delete("#bill");
+    tags.delete("#vehicle");
   }
 
   return Array.from(tags);
