@@ -16,7 +16,7 @@ Speaking is effortless and immediate. Instead of navigating albums or fighting a
 
 > *"Bike plate"* or *"Doctor prescription"*
 
-VoicePad's voice engine processes the spoken phrase as you talk (with a 60ms debounce) and surfaces the exact image in under **400ms** — completely offline, without waiting on cloud connectivity or cellular reception.
+VoicePad's voice engine processes the spoken phrase as you talk and surfaces the exact image is fetched : completely offline, without waiting on cloud connectivity or cellular reception.
 
 ---
 
@@ -146,7 +146,7 @@ The journey to making VoicePad truly "see" and connect with voice commands was t
 
 #### OCR Architecture: Native Android ML Kit + Tesseract WASM
 
-* **Day 1**: Heavy Tesseract.js running on the main UI thread (taking 4–7 seconds per image and freezing tabs).
+Heavy Tesseract.js running on the main UI thread (taking 4–7 seconds per image and freezing tabs).
 
 * **The Transition**:
 
@@ -158,7 +158,7 @@ The journey to making VoicePad truly "see" and connect with voice commands was t
 
 #### Spoken Voice Engine
 
-* **Day 1**: Standard speech recognition waiting for full pause and speech end.
+Standard speech recognition waiting for full pause and speech end.
 
 * **The Problem**: A 2-second delay after speaking ruined the feeling of instant retrieval.
 
