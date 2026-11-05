@@ -11,6 +11,13 @@ import {
   prewarmVisionModel,
 } from "./services/visionService.js";
 import { prewarmOCR } from "./services/tesseractService.js";
+import {
+  prewarmMoonshine,
+  subscribeMoonshineStatus,
+  startAudioCapture,
+  stopAudioCaptureAndTranscribe,
+  cancelAudioCapture,
+} from "./services/moonshineService.js";
 import { createId } from "./id.js";
 
 export default function App() {
@@ -21,6 +28,12 @@ export default function App() {
   const [allEntries, setAllEntries] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [moonshineStatus, setMoonshineStatus] = useState({
+    state: "idle",
+    progress: null,
+    error: null,
+  });
   const [visionModelStatus, setVisionModelStatus] = useState({
     state: "idle",
     progress: null,
@@ -170,12 +183,16 @@ export default function App() {
       .catch((err) => console.error("Failed to load memories:", err));
     const unsubscribeVisionStatus = subscribeVisionModelStatus(setVisionModelStatus);
 
-    // Prior prewarming: silently warms up OCR and YOLO in background without blocking UI
+    // Prior prewarming: silently warms up Vision AI, OCR, and Moonshine STT in background
     prewarmVisionModel();
     prewarmOCR();
+    prewarmMoonshine();
+
+    const unsubscribeMoonshine = subscribeMoonshineStatus(setMoonshineStatus);
 
     return () => {
       unsubscribeVisionStatus();
+      unsubscribeMoonshine();
     };
   }, [loadEntries]);
 
@@ -353,34 +370,53 @@ export default function App() {
   }, [hasVoiceEnergy, stopAudioPipeline]);
 
   const toggleListening = async () => {
-    if (!recognizerRef.current) {
-      alert("Voice recognition not supported in this browser.");
-      return;
-    }
-
     if (isListening) {
       setIsListening(false);
-      stopAudioPipeline();
       try {
-        recognizerRef.current.stop();
-      } catch {
-        // Ignore if already stopped
+        recognizerRef.current?.stop();
+      } catch {}
+
+      setIsTranscribing(true);
+      try {
+        // Transcribe noise-robust 16kHz PCM audio with Moonshine
+        const moonshineText = await stopAudioCaptureAndTranscribe();
+        const clean = (moonshineText || voiceTranscript).trim();
+
+        if (clean) {
+          setVoiceTranscript(clean);
+          setSearchMode("voice");
+          setIsSearching(true);
+          try {
+            const bestHit = await fastSearch(clean);
+            if (bestHit) {
+              setFilteredEntries(Array.isArray(bestHit) ? bestHit : [bestHit]);
+            } else {
+              setFilteredEntries([]);
+            }
+          } finally {
+            setIsSearching(false);
+          }
+        }
+      } catch (err) {
+        console.warn("[Moonshine] STT pass error, falling back to interim transcript:", err);
+      } finally {
+        setIsTranscribing(false);
       }
     } else {
       setIsListening(true);
       setVoiceTranscript("");
       try {
-        // Initialize noise-suppression and high-pass filtering before starting speech recognizer
-        await startAudioPipeline();
-        recognizerRef.current.start();
-      } catch {
+        // Start hardware-level noise reduction and 16kHz audio buffer capture
+        await startAudioCapture();
         try {
-          recognizerRef.current.abort();
-          recognizerRef.current.start();
+          recognizerRef.current?.start();
         } catch {
-          setIsListening(false);
-          stopAudioPipeline();
+          // WebSpeech is optional live preview helper
         }
+      } catch (err) {
+        console.error("[Moonshine] Failed to activate microphone:", err);
+        setIsListening(false);
+        cancelAudioCapture();
       }
     }
   };
@@ -389,6 +425,7 @@ export default function App() {
     setVoiceTranscript("");
     setSearchMode("all");
     setFilteredEntries(allEntries.slice(0, 20));
+    cancelAudioCapture();
   };
 
   // ── Live feed filtering for manual text search (debounced) ───────────────────
@@ -787,25 +824,35 @@ export default function App() {
           )}
           <button
             onClick={toggleListening}
+            disabled={isTranscribing}
             className={`relative z-10 w-28 h-28 rounded-full flex flex-col items-center justify-center transition-transform duration-100 shadow-2xl active:scale-95 select-none ${
-              isListening
+              isTranscribing
+                ? "bg-amber-600 shadow-amber-600/40 ring-4 ring-amber-500/40 scale-100 animate-pulse"
+                : isListening
                 ? "bg-rose-600 shadow-rose-600/40 ring-4 ring-rose-500/40 scale-105"
                 : "bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/30 ring-4 ring-indigo-500/20"
             }`}
-            aria-label={isListening ? "Stop voice search" : "Start voice search"}
+            aria-label={isTranscribing ? "Transcribing speech" : isListening ? "Stop voice search" : "Start voice search"}
           >
-            <span className="text-sm mb-1 font-semibold uppercase select-none">{isListening ? "Stop" : "Speak"}</span>
+            <span className="text-sm mb-1 font-semibold uppercase select-none">
+              {isTranscribing ? "Decoding" : isListening ? "Stop" : "Speak"}
+            </span>
             <span className="text-[10px] font-semibold tracking-wider uppercase text-white/90 select-none">
-              {isListening ? "Listening" : "Voice Search"}
+              {isTranscribing ? "Moonshine AI" : isListening ? "Listening" : "Voice Search"}
             </span>
           </button>
 
-          {isListening && (
+          {isTranscribing ? (
+            <span className="mt-2 text-[10px] font-mono text-amber-400 bg-amber-950/80 border border-amber-500/30 px-2 py-0.5 rounded-full flex items-center gap-1.5 animate-pulse">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+              Moonshine STT Processing...
+            </span>
+          ) : isListening ? (
             <span className="mt-2 text-[10px] font-mono text-emerald-400 bg-emerald-950/80 border border-emerald-500/30 px-2 py-0.5 rounded-full flex items-center gap-1 animate-in fade-in duration-150">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              Noise Filter Active
+              Noise-Gated PCM Active
             </span>
-          )}
+          ) : null}
         </div>
 
         {/* Image capture - live camera & photo gallery */}
@@ -871,10 +918,12 @@ export default function App() {
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                 </span>
-                <span className="text-[11px] font-medium text-emerald-400">Vision AI Model Loaded & Ready</span>
+                <span className="text-[11px] font-medium text-emerald-400">
+                  Multimodal AI (CLIP + Moonshine STT) Ready
+                </span>
               </div>
               <span className="text-[10px] font-mono text-slate-400 bg-slate-800/80 px-2 py-0.5 rounded-md border border-slate-700/60">
-                ONNX / WebGPU
+                ONNX / WASM
               </span>
             </div>
           ) : visionModelStatus.state === "error" ? (
