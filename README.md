@@ -1,6 +1,6 @@
 # VoicePad 🎙️📷
 
-> **A 100% offline, privacy-first visual and voice memory application that runs on-device multimodal AI (Vector Embeddings, OCR, Computer Vision) in the browser and mobile without sending a single byte to the cloud.**
+> **A zero-cloud multimodal retrieval platform that enables natural-language search across visual and audio data, executing computer vision, speech transcription, and vector search entirely in-client.**
 
 ---
 
