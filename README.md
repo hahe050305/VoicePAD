@@ -158,7 +158,7 @@ Heavy Tesseract.js running on the main UI thread freezes the app while processin
 
 #### Spoken Voice Engine: WebSpeech ➔ Moonshine Edge STT
 
-* **Day 1**: Standard browser WebSpeech API.
+Standard browser WebSpeech API.
 
 * **The Problem**: In public settings near traffic or racing vehicles, low signal-to-noise ratio and laptop fan noise caused phoneme dropouts and inaccurate transcription.
 
