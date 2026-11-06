@@ -1,6 +1,6 @@
 # VoicePad 🎙️📷
 
-> **A 100% offline, privacy-first visual and voice memory application that runs on-device multimodal AI (Vector Embeddings, OCR, Computer Vision) in the browser and mobile without sending a single byte to the cloud.**
+> **A zero-cloud multimodal retrieval platform that enables natural-language search across visual and audio data, executing computer vision, speech transcription, and vector search entirely in-client.**
 
 ---
 
@@ -158,7 +158,7 @@ Heavy Tesseract.js running on the main UI thread freezes the app while processin
 
 #### Spoken Voice Engine: WebSpeech ➔ Moonshine Edge STT
 
-* **Day 1**: Standard browser WebSpeech API.
+Standard browser WebSpeech API.
 
 * **The Problem**: In public settings near traffic or racing vehicles, low signal-to-noise ratio and laptop fan noise caused phoneme dropouts and inaccurate transcription.
 
