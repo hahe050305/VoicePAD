@@ -1,4 +1,6 @@
 // src/services/moonshineService.js
+import { ensureMoonshineModelCached } from "./modelCache.js";
+
 // Client service for on-device Moonshine Speech-to-Text.
 // Captures 16kHz mono PCM audio via Web Audio API and runs transcription in an offline Web Worker.
 
@@ -65,11 +67,16 @@ function getWorker() {
 
 export function prewarmMoonshine() {
   if (typeof window === "undefined") return;
-  setTimeout(() => {
-    runTask("warmup").catch((err) => {
-      console.warn("[Moonshine] Background model pre-warming skipped:", err);
+  // Ensure model assets are cached locally before warm‑up
+  ensureMoonshineModelCached()
+    .catch((e) => console.warn("[Moonshine] Cache priming failed:", e))
+    .finally(() => {
+      setTimeout(() => {
+        runTask("warmup").catch((err) => {
+          console.warn("[Moonshine] Background model pre‑warming skipped:", err);
+        });
+      }, 2500);
     });
-  }, 2500);
 }
 
 function runTask(type, payload) {
