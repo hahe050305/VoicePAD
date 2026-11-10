@@ -952,88 +952,101 @@ export default function App() {
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center px-4 py-8 antialiased selection:bg-indigo-500 selection:text-white">
-      {/* Header */}
-      <header className="w-full max-w-xl flex items-center justify-between pb-6 border-b border-slate-800/80 mb-8">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-pulse"></span>
-            VoicePAD
-          </h1>
-          <p className="text-xs text-slate-400 mt-0.5">
-            Real-time
-          </p>
+    <div className="min-h-screen bg-[#07090e] text-slate-100 flex flex-col items-center px-4 py-6 antialiased selection:bg-indigo-500 selection:text-white relative overflow-x-hidden">
+      {/* Ambient background glows */}
+      <div className="fixed top-[-140px] left-1/2 -translate-x-1/2 w-[520px] h-[360px] bg-gradient-to-b from-indigo-600/20 via-violet-600/10 to-transparent blur-[110px] pointer-events-none rounded-full" />
+      <div className="fixed bottom-[-120px] right-[-100px] w-[360px] h-[360px] bg-sky-500/10 blur-[130px] pointer-events-none rounded-full" />
+
+      {/* Clean Mobile App Header */}
+      <header className="w-full max-w-md flex items-center justify-between pb-4 mb-2 z-10">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+            <span className="text-white text-sm">✦</span>
+          </div>
+          <div>
+            <h1 className="text-base font-semibold tracking-tight text-white/95">
+              VoicePad
+            </h1>
+            <p className="text-[11px] text-slate-400 font-normal">
+              Instant memory capture
+            </p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-[11px] font-mono tracking-wider uppercase px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-slate-400">
-            Local-First
-          </span>
+          <span className="w-2 h-2 rounded-full bg-emerald-400/80 shadow-[0_0_8px_rgba(52,211,153,0.6)]" />
         </div>
       </header>
 
-      <main className="w-full max-w-xl flex flex-col items-center">
-        {/* Voice Orb with Instagram Notes-inspired Floater Bubble */}
-        <div className="relative my-6 flex flex-col items-center">
+      <main className="w-full max-w-md flex flex-col items-center z-10">
+        {/* Soft Ambient Voice Orb */}
+        <div className="relative my-4 flex flex-col items-center">
+          {/* Conversational Floater Bubble */}
           {(voiceTranscript || isListening) && (
-            <div className="absolute -top-10 -right-8 z-20 flex flex-col items-start max-w-[210px] animate-in fade-in zoom-in-95 duration-200">
-              <div className="relative px-3 py-1.5 bg-indigo-600 text-white rounded-2xl rounded-bl-sm shadow-xl border border-indigo-400/40 flex items-center gap-1.5 backdrop-blur-md">
-                <span className="text-[10px] font-semibold uppercase">Voice</span>
-                <span className="text-xs font-medium tracking-tight truncate max-w-[150px]">
+            <div className="absolute -top-11 z-20 flex flex-col items-center animate-in fade-in zoom-in-95 duration-200">
+              <div className="px-3.5 py-1.5 bg-slate-900/90 text-white rounded-full shadow-2xl border border-white/10 flex items-center gap-2 backdrop-blur-xl">
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+                <span className="text-xs font-medium tracking-tight truncate max-w-[200px]">
                   {voiceTranscript ? `"${voiceTranscript}"` : "Listening..."}
                 </span>
                 {voiceTranscript && (
                   <button
                     onClick={clearVoiceSearch}
-                    className="ml-1 text-[11px] text-indigo-200 hover:text-white px-1 py-0.5 rounded-full hover:bg-indigo-700/60 transition"
+                    className="text-slate-400 hover:text-white text-xs px-1 hover:bg-white/10 rounded-full transition"
                     title="Clear voice query"
                     aria-label="Clear voice query"
                   >
-                    ×
+                    ✕
                   </button>
                 )}
               </div>
-              <div className="w-2 h-2 bg-indigo-600 rounded-full ml-2 -mt-0.5 border border-indigo-400/30" />
             </div>
           )}
 
-          {isListening && (
-            <div className="absolute inset-0 -m-2 rounded-full bg-rose-500/25 blur-md animate-pulse pointer-events-none" />
-          )}
+          {/* Organic Glow */}
+          <div
+            className={`absolute inset-0 rounded-full blur-2xl transition-all duration-500 pointer-events-none ${
+              isListening
+                ? "bg-rose-500/40 scale-125 animate-pulse"
+                : isTranscribing
+                ? "bg-amber-500/30 scale-110"
+                : "bg-indigo-500/20 scale-100"
+            }`}
+          />
+
+          {/* Glowing Voice Button */}
           <button
             onClick={toggleListening}
             disabled={isTranscribing}
-            className={`relative z-10 w-28 h-28 rounded-full flex flex-col items-center justify-center transition-transform duration-100 shadow-2xl active:scale-95 select-none ${
+            className={`relative z-10 w-24 h-24 rounded-full flex flex-col items-center justify-center transition-all duration-300 shadow-2xl active:scale-95 select-none ${
               isTranscribing
-                ? "bg-amber-600 shadow-amber-600/40 ring-4 ring-amber-500/40 scale-100 animate-pulse"
+                ? "bg-gradient-to-tr from-amber-600 to-amber-500 shadow-amber-500/30 ring-2 ring-white/20"
                 : isListening
-                ? "bg-rose-600 shadow-rose-600/40 ring-4 ring-rose-500/40 scale-105"
-                : "bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/30 ring-4 ring-indigo-500/20"
+                ? "bg-gradient-to-tr from-rose-600 to-pink-600 shadow-rose-500/40 ring-4 ring-rose-400/30 scale-105"
+                : "bg-gradient-to-tr from-indigo-600 via-indigo-500 to-violet-500 hover:brightness-110 shadow-indigo-500/30 ring-1 ring-white/20"
             }`}
-            aria-label={isTranscribing ? "Transcribing speech" : isListening ? "Stop voice search" : "Start voice search"}
+            aria-label={isTranscribing ? "Processing voice" : isListening ? "Stop listening" : "Tap to speak"}
           >
-            <span className="text-sm mb-1 font-semibold uppercase select-none">
-              {isTranscribing ? "Decoding" : isListening ? "Stop" : "Speak"}
-            </span>
-            <span className="text-[10px] font-semibold tracking-wider uppercase text-white/90 select-none">
-              {isTranscribing ? "Moonshine AI" : isListening ? "Listening" : "Voice Search"}
+            {isListening ? (
+              <div className="flex items-center gap-1 my-1">
+                <span className="w-1 h-3.5 bg-white rounded-full animate-[bounce_1s_infinite_100ms]" />
+                <span className="w-1 h-5 bg-white rounded-full animate-[bounce_1s_infinite_200ms]" />
+                <span className="w-1 h-3 bg-white rounded-full animate-[bounce_1s_infinite_300ms]" />
+              </div>
+            ) : isTranscribing ? (
+              <span className="text-xs font-medium text-white/95 my-1">Thinking</span>
+            ) : (
+              <svg className="w-6 h-6 text-white my-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 02-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+              </svg>
+            )}
+            <span className="text-[10px] font-medium text-white/80">
+              {isTranscribing ? "Resolving" : isListening ? "Tap to finish" : "Tap to speak"}
             </span>
           </button>
-
-          {isTranscribing ? (
-            <span className="mt-2 text-[10px] font-mono text-amber-400 bg-amber-950/80 border border-amber-500/30 px-2 py-0.5 rounded-full flex items-center gap-1.5 animate-pulse">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
-              Moonshine STT Processing...
-            </span>
-          ) : isListening ? (
-            <span className="mt-2 text-[10px] font-mono text-emerald-400 bg-emerald-950/80 border border-emerald-500/30 px-2 py-0.5 rounded-full flex items-center gap-1 animate-in fade-in duration-150">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              Noise-Gated PCM Active
-            </span>
-          ) : null}
         </div>
 
-        {/* Image capture - live camera & photo gallery */}
-        <div className="w-full flex items-center justify-center gap-3 my-2">
+        {/* Ambient Action Pills */}
+        <div className="w-full flex items-center justify-center gap-2.5 my-2">
           <input
             ref={fileInputRef}
             type="file"
@@ -1053,86 +1066,40 @@ export default function App() {
           <button
             type="button"
             onClick={() => cameraInputRef.current?.click()}
-            className="flex-1 max-w-[170px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold border transition shadow-sm bg-indigo-600 hover:bg-indigo-500 border-indigo-500/40 text-white active:scale-95"
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-medium bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/90 backdrop-blur-md transition active:scale-95 shadow-sm"
           >
-            <span className="text-base select-none">📷</span>
-            <span>Live Capture</span>
+            <svg className="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            <span>Capture Photo</span>
           </button>
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="flex-1 max-w-[170px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-medium border transition shadow-sm bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-slate-700 text-slate-200 active:scale-95"
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-medium bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] text-slate-300 backdrop-blur-md transition active:scale-95 shadow-sm"
           >
-            <span className="text-base select-none">🖼️</span>
-            <span>Upload Photos</span>
+            <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            <span>From Library</span>
           </button>
         </div>
 
-        {/* Vision AI Model Status Bar */}
-        <div className="w-full max-w-md mt-2 mb-1 px-3.5 py-2 rounded-xl bg-slate-900/80 border border-slate-800 backdrop-blur text-xs flex items-center gap-2.5 transition-all">
-          {visionModelStatus.state === "loading" ? (
-            <>
-              <div className="w-3.5 h-3.5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between text-[11px] mb-1">
-                  <span className="text-indigo-300 font-medium">Loading Vision AI model...</span>
-                  <span className="font-mono text-slate-400">
-                    {visionModelStatus.progress != null ? `${visionModelStatus.progress}%` : "downloading..."}
-                  </span>
-                </div>
-                <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                  <div
-                    className="bg-indigo-500 h-full rounded-full transition-all duration-300"
-                    style={{ width: `${visionModelStatus.progress != null ? Math.max(5, visionModelStatus.progress) : 35}%` }}
-                  />
-                </div>
-              </div>
-            </>
-          ) : visionModelStatus.state === "ready" ? (
-            <div className="flex items-center justify-between w-full">
-              <div className="flex items-center gap-2">
-                <span className="flex h-2 w-2 relative">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                </span>
-                <span className="text-[11px] font-medium text-emerald-400">
-                  Multimodal AI (CLIP + Moonshine STT) Ready
-                </span>
-              </div>
-              <span className="text-[10px] font-mono text-slate-400 bg-slate-800/80 px-2 py-0.5 rounded-md border border-slate-700/60">
-                ONNX / WASM
-              </span>
-            </div>
-          ) : visionModelStatus.state === "error" ? (
-            <div className="flex items-center gap-2 text-rose-400 text-[11px] w-full">
-              <span>⚠️</span>
-              <span className="truncate">Model load failed: {visionModelStatus.error || "Unknown error"}</span>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between w-full">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-slate-500"></span>
-                <span className="text-[11px] font-medium text-slate-400">Vision Model: Ready (Pre-Warmed)</span>
-              </div>
-              <span className="text-[10px] font-mono text-slate-500 bg-slate-800/50 px-2 py-0.5 rounded-md border border-slate-800">
-                YOLO-tiny
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* Search bar - manual text filter */}
-        <form onSubmit={handleSearchSubmit} className="w-full mt-4">
+        {/* Ambient Search Bar */}
+        <form onSubmit={handleSearchSubmit} className="w-full mt-2">
           <div className="relative flex items-center">
-            <span className="absolute left-3 text-slate-500 text-sm pointer-events-none">
-              
+            <span className="absolute left-3.5 text-slate-400 pointer-events-none">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
             </span>
             <input
               type="text"
-              placeholder="Search memories - results update as you type"
+              placeholder="Search memories, photos, notes..."
               value={query}
               onChange={handleQueryChange}
-              className="w-full pl-16 pr-24 py-3 bg-slate-900/90 border border-slate-800 rounded-xl text-sm placeholder-slate-500 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition shadow-inner"
+              className="w-full pl-10 pr-9 py-2.5 bg-white/[0.04] border border-white/[0.08] hover:border-white/[0.12] rounded-2xl text-xs text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 focus:border-indigo-500/50 backdrop-blur-xl transition shadow-inner"
             />
             {query && (
               <button
@@ -1142,93 +1109,74 @@ export default function App() {
                   setSearchMode("all");
                   setFilteredEntries(allEntries.slice(0, 20));
                 }}
-                className="absolute right-20 text-slate-500 hover:text-slate-300 text-xs"
+                className="absolute right-3 text-slate-400 hover:text-white text-xs transition"
                 aria-label="Clear search"
               >
+                ✕
               </button>
             )}
           </div>
           {query.trim() && searchMode === "text" && (
-            <p className="text-[11px] text-slate-500 mt-1.5 ml-1">
-              Showing{" "}
-              <span className="text-indigo-400 font-medium">
-                {filteredEntries.length}
-              </span>{" "}
-              {filteredEntries.length === 1 ? "best match" : "matches (high to low)"} for "{query}"
+            <p className="text-[11px] text-slate-400 mt-1.5 ml-2">
+              {filteredEntries.length} {filteredEntries.length === 1 ? "match" : "matches"} found
             </p>
           )}
         </form>
 
-        {/* Quick Note with auto-tagging */}
-        <form onSubmit={handleAddQuickNote} className="w-full mt-3">
+        {/* Quick Note Input */}
+        <form onSubmit={handleAddQuickNote} className="w-full mt-2">
           <div className="flex gap-2">
             <input
               type="text"
-              placeholder="Write a note - tags are detected as you type (e.g. bike, meeting, wifi)"
+              placeholder="Remember a quick thought..."
               value={manualNote}
               onChange={handleNoteChange}
-              className="flex-1 px-3 py-2 bg-slate-900/50 border border-slate-800/80 rounded-lg text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-slate-700"
+              className="flex-1 px-3.5 py-2 bg-white/[0.03] border border-white/[0.06] rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500/40 transition"
             />
             <button
               type="submit"
-              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium border border-slate-700/80 transition whitespace-nowrap flex items-center gap-1.5"
+              className="px-3.5 py-2 bg-white/[0.06] hover:bg-white/[0.1] text-slate-200 rounded-xl text-xs font-medium border border-white/[0.08] transition whitespace-nowrap active:scale-95"
             >
-              <span>💾</span>
-              <span>Save</span>
+              Save
             </button>
           </div>
-          {manualNote.trim() && (
+          {manualNote.trim() && autoTags.length > 0 && (
             <div className="flex items-center gap-1.5 mt-2 flex-wrap animate-in fade-in duration-150">
-              <span className="text-[10px] text-slate-500 flex items-center gap-1">
-                <span>🏷️</span> Auto-tags:
-              </span>
-              {autoTags.length > 0 ? (
-                autoTags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/90 text-indigo-300 border border-indigo-500/40 font-medium shadow-sm"
-                  >
-                    {tag}
-                  </span>
-                ))
-              ) : (
-                <span className="text-[10px] text-slate-500 italic">
-                  No matching tag yet (type e.g. #custom, car, meeting, pass, buy...)
+              {autoTags.map((tag) => (
+                <span
+                  key={tag}
+                  className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 font-medium"
+                >
+                  {tag}
                 </span>
-              )}
+              ))}
             </div>
           )}
         </form>
 
-        {/* Feed with in-card editing */}
-        <section className="w-full mt-8">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+        {/* Ambient Feed */}
+        <section className="w-full mt-6">
+          <div className="flex items-center justify-between mb-3 px-1">
+            <h2 className="text-xs font-medium text-slate-400">
               {searchMode === "voice" && voiceTranscript.trim() ? (
-                <>
-                  <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                  {filteredEntries.length > 1 ? `Your Photos (${filteredEntries.length})` : "Top Voice Match"}
-                </>
+                <span className="flex items-center gap-1.5 text-white/90">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  Voice Match
+                </span>
               ) : query.trim() ? (
-                filteredEntries.length === 1 ? "Best Match" : "Best Matches (High to Low)"
+                `${filteredEntries.length} ${filteredEntries.length === 1 ? "match" : "matches"}`
               ) : (
-                `Stored Memories (${allEntries.length})`
+                "Recent Memories"
               )}
             </h2>
-            <span className="text-[11px] text-slate-500">
-              {searchMode === "voice" && voiceTranscript.trim() ? (
-                <button
-                  onClick={clearVoiceSearch}
-                  className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2 transition"
-                >
-                  Show all memories
-                </button>
-              ) : query.trim() ? (
-                filteredEntries.length === 1 ? "1 result" : `${filteredEntries.length} results (ranked)`
-              ) : (
-                "Auto-Indexed"
-              )}
-            </span>
+            {searchMode === "voice" && voiceTranscript.trim() ? (
+              <button
+                onClick={clearVoiceSearch}
+                className="text-[11px] text-indigo-400 hover:text-indigo-300 transition"
+              >
+                Show all
+              </button>
+            ) : null}
           </div>
 
           {isSearching ? (
@@ -1236,27 +1184,23 @@ export default function App() {
               {[1, 2, 3].map((i) => (
                 <div
                   key={i}
-                  className="p-3.5 bg-slate-900/40 border border-slate-800/60 rounded-xl flex items-start justify-between gap-3"
+                  className="p-3.5 bg-white/[0.02] border border-white/[0.04] rounded-2xl flex items-start justify-between gap-3"
                 >
                   <div className="flex-1 space-y-2">
-                    <div className="h-3.5 bg-slate-800 rounded w-3/4" />
-                    <div className="h-3 bg-slate-800/70 rounded w-1/2" />
-                    <div className="flex gap-1.5 pt-1">
-                      <div className="h-4 bg-slate-800/80 rounded w-12" />
-                      <div className="h-4 bg-slate-800/80 rounded w-14" />
-                    </div>
+                    <div className="h-3.5 bg-white/[0.06] rounded w-3/4" />
+                    <div className="h-3 bg-white/[0.04] rounded w-1/2" />
                   </div>
-                  <div className="w-10 h-3 bg-slate-800/50 rounded shrink-0" />
+                  <div className="w-10 h-3 bg-white/[0.04] rounded shrink-0" />
                 </div>
               ))}
             </div>
           ) : filteredEntries.length === 0 && (query.trim() || voiceTranscript.trim()) ? (
-            <div className="py-10 text-center">
+            <div className="py-12 text-center">
               <p className="text-slate-400 text-sm">
-                No matching memory found for "{voiceTranscript || query}"
+                No memories found for "{voiceTranscript || query}"
               </p>
-              <p className="text-slate-600 text-xs mt-1">
-                Try asking differently or check your stored notes below.
+              <p className="text-slate-500 text-xs mt-1">
+                Try a different phrase or add a label to your photo.
               </p>
             </div>
           ) : (
@@ -1285,12 +1229,12 @@ export default function App() {
                         setSelectedEntry(entry);
                       }
                     }}
-                    className="p-3.5 bg-slate-900/70 border border-slate-800/80 hover:border-slate-700 rounded-xl transition flex flex-col gap-2.5 shadow-sm cursor-pointer"
+                    className="p-3.5 bg-white/[0.03] hover:bg-white/[0.05] border border-white/[0.06] hover:border-white/[0.12] rounded-2xl transition flex flex-col gap-2.5 shadow-sm cursor-pointer backdrop-blur-md"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-                          {entry.type === "image" && !isPureImage ? (
+                          {entry.type === "image" && !isPureImage && entry.ocr && (
                             <button
                               type="button"
                               onClick={(event) => {
@@ -1298,27 +1242,21 @@ export default function App() {
                                 setOcrExpandedId((currentId) => currentId === entry.id ? null : entry.id);
                               }}
                               aria-expanded={ocrExpandedId === entry.id}
-                              aria-label={`${ocrExpandedId === entry.id ? "Hide" : "Show"} extracted OCR text`}
-                              title={`${ocrExpandedId === entry.id ? "Hide" : "Show"} extracted text`}
-                              className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+                              className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/[0.05] hover:bg-white/[0.1] text-slate-300 border border-white/[0.08] transition flex items-center gap-1"
                             >
-                              OCR {ocrExpandedId === entry.id ? "▲" : "▼"}
+                              <span>📄</span>
+                              <span>{ocrExpandedId === entry.id ? "Hide text" : "Show text"}</span>
                             </button>
-                          ) : (
-                            <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
-                              {entry.type === "image" ? "Image" : "Note"}
-                            </span>
                           )}
                           {entry.label ? (
-                            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/40 text-indigo-300 flex items-center gap-1">
+                            <span className="text-[10px] font-medium px-2.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 flex items-center gap-1">
                               🏷️ {entry.label}
                             </span>
                           ) : entry.type === "image" ? (
                             <div className="flex items-center gap-1.5">
                               <button
                                 onClick={(e) => startEditing(entry, e)}
-                                className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-600/40 text-amber-300 hover:bg-amber-900/90 transition flex items-center gap-1"
-                                title="Click to add a label for instant search"
+                                className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 transition"
                               >
                                 + Label
                               </button>
@@ -1327,10 +1265,9 @@ export default function App() {
                                 onClick={(e) => handleStartVoiceLabel(entry, e)}
                                 className={`text-[10px] font-medium px-2 py-0.5 rounded-full border transition flex items-center gap-1 ${
                                   recordingCardId === entry.id
-                                    ? "bg-rose-600 text-white border-rose-500 animate-pulse"
-                                    : "bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700"
+                                    ? "bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse"
+                                    : "bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 border-white/[0.08]"
                                 }`}
-                                title="Record a 2-second voice note to label this image"
                               >
                                 🎤 {recordingCardId === entry.id ? "Listening..." : "Voice Note"}
                               </button>
@@ -1344,14 +1281,14 @@ export default function App() {
                             {entry.type === "image" && (
                               <div>
                                 <label className="text-[10px] text-slate-400 block mb-1 font-medium">
-                                  Image Label:
+                                  Label:
                                 </label>
                                 <input
                                   type="text"
                                   value={editLabel}
                                   onChange={(e) => setEditLabel(e.target.value)}
-                                  className="w-full px-2.5 py-1.5 bg-slate-950 border border-indigo-500/50 rounded-lg text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 mb-2"
-                                  placeholder="e.g. My Photo, Aadhaar Card, License Plate..."
+                                  className="w-full px-3 py-1.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 mb-2"
+                                  placeholder="e.g. Blue bag with keys, ID Card..."
                                   autoFocus
                                 />
                               </div>
@@ -1360,72 +1297,57 @@ export default function App() {
                               value={editText}
                               onChange={(e) => setEditText(e.target.value)}
                               rows={isPureImage ? 2 : 3}
-                              className="w-full p-2.5 bg-slate-950 border border-indigo-500/50 rounded-lg text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              className="w-full p-2.5 bg-slate-900 border border-white/10 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                               placeholder={
                                 isPureImage
-                                  ? "Optional description / caption..."
+                                  ? "Description or notes..."
                                   : entry.type === "image"
-                                  ? "Extracted OCR text..."
+                                  ? "Extracted text..."
                                   : "Edit memory content..."
                               }
                             />
-                            {(editText.trim() || editLabel.trim()) && (
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="text-[10px] text-slate-500">
-                                  Updated tags:
-                                </span>
-                                {deriveTags(`${editLabel} ${editText}`).map((tag) => (
-                                  <span
-                                    key={tag}
-                                    className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 font-medium"
-                                  >
-                                    {tag}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
                             <div className="flex items-center gap-2 pt-1">
                               <button
                                 onClick={(e) => handleSaveEdit(entry, e)}
-                                className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium transition shadow"
+                                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-medium transition shadow"
                               >
                                 Save
                               </button>
                               <button
                                 onClick={cancelEditing}
-                                className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition"
+                                className="px-3.5 py-1.5 bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 rounded-xl text-xs font-medium transition"
                               >
                                 Cancel
                               </button>
                             </div>
                             {editingError && (
-                              <p className="text-[11px] text-rose-400 mt-1 font-medium animate-in fade-in">
-                                Error: {editingError}
+                              <p className="text-[11px] text-rose-400 mt-1 font-medium">
+                                {editingError}
                               </p>
                             )}
                           </div>
                         ) : entry.type === "image" ? (
                           <div className="mt-1 space-y-2">
-                            <div className="w-full aspect-[4/3] max-h-80 rounded-xl overflow-hidden bg-slate-950 border border-slate-800/90 flex items-center justify-center p-1">
+                            <div className="w-full aspect-[4/3] max-h-80 rounded-2xl overflow-hidden bg-black/40 border border-white/[0.06] flex items-center justify-center p-1">
                               {entry.thumbnailUrl ? (
                                 <img
                                   src={entry.thumbnailUrl}
-                                  alt={entry.label || "Image"}
+                                  alt={entry.label || "Memory photo"}
                                   loading="lazy"
                                   decoding="async"
                                   fetchPriority="low"
-                                  className="max-h-72 max-w-full object-contain rounded-lg"
+                                  className="max-h-72 max-w-full object-contain rounded-xl"
                                 />
                               ) : (
                                 <span className="px-4 text-center text-xs text-slate-500">
-                                  {entry.thumbnailFailed ? "Preview unavailable - tap to open" : "Preparing preview..."}
+                                  {entry.thumbnailFailed ? "Tap to open photo" : "Loading..."}
                                 </span>
                               )}
                             </div>
                             {!isPureImage && ocrExpandedId === entry.id && entry.ocr && (
                               <p
                                 id={`ocr-text-${entry.id}`}
-                                className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap"
+                                className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap bg-white/[0.02] p-2.5 rounded-xl border border-white/[0.04]"
                               >
                                 {entry.ocr}
                               </p>
@@ -1434,30 +1356,21 @@ export default function App() {
                               {entry.tags?.map((tag) => (
                                 <span
                                   key={tag}
-                                  className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 font-medium"
+                                  className="text-[10px] px-2.5 py-0.5 rounded-full bg-white/[0.04] text-slate-300 border border-white/[0.06] font-medium"
                                 >
                                   {tag}
                                 </span>
                               ))}
                             </div>
 
-                            {/* Secondary Fallback Banner when CLIP failed to classify */}
+                            {/* Human-friendly ambient prompt when image is unclassified */}
                             {isClipFailed && (
                               <div
                                 onClick={(e) => e.stopPropagation()}
-                                className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/40 text-amber-200 flex flex-col gap-2 mt-2 shadow-inner animate-in fade-in duration-150"
+                                className="p-3 rounded-2xl bg-white/[0.02] border border-indigo-500/20 text-slate-200 flex flex-col gap-2 mt-2"
                               >
-                                <div className="flex items-center justify-between text-xs font-semibold text-amber-300">
-                                  <span className="flex items-center gap-1.5">
-                                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
-                                    AI couldn't auto-tag this photo
-                                  </span>
-                                  <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-amber-900/60 border border-amber-600/50 text-amber-300">
-                                    Secondary Fallback
-                                  </span>
-                                </div>
-                                <p className="text-[11px] text-amber-200/90 leading-relaxed">
-                                  Small or obscured items (like keys in a bag) need a quick voice note or manual label so you can find them instantly.
+                                <p className="text-[11px] text-slate-300 leading-relaxed">
+                                  Need help finding this later? Add a 2-second voice note or label.
                                 </p>
 
                                 {quickLabelingId === entry.id ? (
@@ -1474,13 +1387,13 @@ export default function App() {
                                           }
                                         }}
                                         placeholder="e.g. Keys inside bag zip..."
-                                        className="flex-1 px-2.5 py-1.5 bg-slate-950 border border-amber-500/60 rounded-lg text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                        className="flex-1 px-3 py-1.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                                         autoFocus
                                       />
                                       <button
                                         type="button"
                                         onClick={(e) => handleSaveQuickLabel(entry, quickLabelInput, e)}
-                                        className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold rounded-lg text-xs transition"
+                                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl text-xs transition"
                                       >
                                         Save
                                       </button>
@@ -1490,20 +1403,19 @@ export default function App() {
                                           e.stopPropagation();
                                           setQuickLabelingId(null);
                                         }}
-                                        className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition"
+                                        className="px-2.5 py-1.5 bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 rounded-xl text-xs transition"
                                       >
                                         Cancel
                                       </button>
                                     </div>
 
                                     <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-                                      <span className="text-[10px] text-slate-400">Quick chips:</span>
                                       {["Keys in bag", "Car keys", "House keys", "Backpack", "Wallet", "Receipt"].map((chip) => (
                                         <button
                                           key={chip}
                                           type="button"
                                           onClick={(e) => handleSaveQuickLabel(entry, chip, e)}
-                                          className="text-[10px] px-2 py-0.5 rounded-full bg-slate-900 hover:bg-amber-900/60 text-amber-200 border border-amber-700/50 transition"
+                                          className="text-[10px] px-2.5 py-0.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-indigo-300 border border-white/[0.06] transition"
                                         >
                                           + {chip}
                                         </button>
@@ -1515,16 +1427,15 @@ export default function App() {
                                     <button
                                       type="button"
                                       onClick={(e) => handleStartVoiceLabel(entry, e)}
-                                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
+                                      className={`px-3 py-1.5 rounded-xl text-xs font-medium flex items-center gap-1.5 transition ${
                                         recordingCardId === entry.id
-                                          ? "bg-rose-600 text-white animate-pulse"
-                                          : "bg-amber-500 hover:bg-amber-400 text-slate-950 shadow"
+                                          ? "bg-rose-500 text-white animate-pulse"
+                                          : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm"
                                       }`}
-                                      title="Record a quick voice note (e.g. 'keys in bag zip')"
                                     >
                                       <span>{recordingCardId === entry.id ? "⏹️ Stop" : "🎤 2-Sec Voice Note"}</span>
                                       {recordingCardId === entry.id && (
-                                        <span className="text-[10px] font-mono text-white/90">Listening...</span>
+                                        <span className="text-[10px] text-white/90">Listening...</span>
                                       )}
                                     </button>
 
@@ -1535,9 +1446,9 @@ export default function App() {
                                         setQuickLabelingId(entry.id);
                                         setQuickLabelInput("");
                                       }}
-                                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                                      className="px-3 py-1.5 bg-white/[0.05] hover:bg-white/[0.08] text-slate-200 border border-white/[0.08] rounded-xl text-xs font-medium transition flex items-center gap-1"
                                     >
-                                      <span>🏷️ Add Manual Label</span>
+                                      <span>🏷️ Add Label</span>
                                     </button>
                                   </div>
                                 )}
@@ -1547,15 +1458,13 @@ export default function App() {
                         ) : (
                           <>
                             <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
-                              {entry.type === "text"
-                                ? entry.content
-                                : entry.ocr || "(No readable text in image)"}
+                              {entry.content}
                             </p>
                             <div className="flex items-center gap-1.5 mt-2 flex-wrap">
                               {entry.tags?.map((tag) => (
                                 <span
                                   key={tag}
-                                  className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 font-medium"
+                                  className="text-[10px] px-2.5 py-0.5 rounded-full bg-white/[0.04] text-slate-300 border border-white/[0.06] font-medium"
                                 >
                                   {tag}
                                 </span>
@@ -1567,13 +1476,13 @@ export default function App() {
 
                       {!isEditing && (
                         <div className="flex flex-col items-end gap-1.5 shrink-0">
-                          <span className="text-[10px] text-slate-500 font-mono">
+                          <span className="text-[10px] text-slate-500">
                             {formatTime(entry.timestamp)}
                           </span>
                           <div className="flex items-center gap-1">
                             <button
                               onClick={(e) => startEditing(entry, e)}
-                              className="text-[12px] text-slate-400 hover:text-indigo-400 p-1 rounded hover:bg-slate-800 transition"
+                              className="text-[11px] text-slate-400 hover:text-white px-1.5 py-0.5 rounded-lg hover:bg-white/[0.06] transition"
                               title="Edit memory"
                               aria-label="Edit memory"
                             >
@@ -1581,7 +1490,7 @@ export default function App() {
                             </button>
                             <button
                               onClick={(e) => handleDeleteEntry(entry, e)}
-                              className="text-[12px] text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-slate-800 transition"
+                              className="text-[11px] text-slate-400 hover:text-rose-400 px-1.5 py-0.5 rounded-lg hover:bg-white/[0.06] transition"
                               title="Delete memory"
                               aria-label="Delete memory"
                             >
@@ -1599,7 +1508,7 @@ export default function App() {
         </section>
       </main>
 
-      {/* Centered zoomed memory card */}
+      {/* Centered zoomed memory modal */}
       {selectedEntry && (() => {
         const modalEntry = selectedEntry;
         const modalPure =
@@ -1609,39 +1518,35 @@ export default function App() {
 
         return (
           <div
-            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-2xl flex items-center justify-center p-4 animate-in fade-in duration-150"
             onClick={() => setSelectedEntry(null)}
           >
             <div
-              className="w-full max-w-3xl max-h-[90vh] overflow-y-auto p-3.5 bg-slate-900/70 border border-slate-800/80 rounded-xl shadow-2xl animate-in zoom-in-95 duration-150"
+              className="w-full max-w-2xl max-h-[90vh] overflow-y-auto p-4 bg-slate-900/90 border border-white/10 rounded-3xl shadow-2xl animate-in zoom-in-95 duration-150"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-                  {modalEntry.type === "image" && !modalPure ? (
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {modalEntry.type === "image" && !modalPure && modalEntry.ocr && (
                     <button
                       type="button"
                       onClick={() => setOcrExpandedId((currentId) => currentId === modalEntry.id ? null : modalEntry.id)}
                       aria-expanded={ocrExpandedId === modalEntry.id}
-                      aria-label={`${ocrExpandedId === modalEntry.id ? "Hide" : "Show"} extracted OCR text`}
-                      className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+                      className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 border border-white/[0.08] transition flex items-center gap-1"
                     >
-                      OCR {ocrExpandedId === modalEntry.id ? "Collapse" : "Expand"}
+                      <span>📄</span>
+                      <span>{ocrExpandedId === modalEntry.id ? "Hide text" : "Show text"}</span>
                     </button>
-                  ) : (
-                    <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
-                      {modalEntry.type === "image" ? "Image" : "Note"}
-                    </span>
                   )}
                   {modalEntry.label ? (
-                    <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/40 text-indigo-300 flex items-center gap-1">
+                    <span className="text-[10px] font-medium px-2.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 flex items-center gap-1">
                       🏷️ {modalEntry.label}
                     </span>
                   ) : modalEntry.type === "image" ? (
                     <div className="flex items-center gap-1.5">
                       <button
                         onClick={() => { startEditing(modalEntry); setSelectedEntry(null); }}
-                        className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-600/40 text-amber-300 hover:bg-amber-900/90 transition flex items-center gap-1"
+                        className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 transition"
                       >
                         + Add Label
                       </button>
@@ -1650,8 +1555,8 @@ export default function App() {
                         onClick={(e) => handleStartVoiceLabel(modalEntry, e)}
                         className={`text-[10px] font-medium px-2 py-0.5 rounded-full border transition flex items-center gap-1 ${
                           recordingCardId === modalEntry.id
-                            ? "bg-rose-600 text-white border-rose-500 animate-pulse"
-                            : "bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700"
+                            ? "bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse"
+                            : "bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 border-white/[0.08]"
                         }`}
                       >
                         🎤 {recordingCardId === modalEntry.id ? "Listening..." : "Voice Note"}
@@ -1659,54 +1564,43 @@ export default function App() {
                     </div>
                   ) : null}
                 </div>
-                <div className="flex flex-col items-end gap-1.5 shrink-0">
-                  <span className="text-[10px] text-slate-500 font-mono">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-slate-500">
                     {formatTime(modalEntry.timestamp)}
                   </span>
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => { startEditing(modalEntry); setSelectedEntry(null); }}
-                      className="text-[12px] text-slate-400 hover:text-indigo-400 p-1 rounded hover:bg-slate-800 transition"
-                      title="Edit memory"
-                      aria-label="Edit memory"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      onClick={(event) => { handleDeleteEntry(modalEntry, event); setSelectedEntry(null); }}
-                      className="text-[12px] text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-slate-800 transition"
-                      title="Delete memory"
-                      aria-label="Delete memory"
-                    >
-                      Delete
-                    </button>
-                  </div>
+                  <button
+                    onClick={() => setSelectedEntry(null)}
+                    className="text-slate-400 hover:text-white text-sm p-1 rounded-full hover:bg-white/10 transition"
+                    aria-label="Close modal"
+                  >
+                    ✕
+                  </button>
                 </div>
               </div>
 
               {modalEntry.type === "image" ? (
-                <div className="mt-1 space-y-2">
-                  <div className="w-full max-h-[70vh] rounded-xl overflow-hidden bg-slate-950 border border-slate-800/90 flex items-center justify-center p-1 group">
+                <div className="mt-2 space-y-2">
+                  <div className="w-full max-h-[70vh] rounded-2xl overflow-hidden bg-black/60 border border-white/[0.08] flex items-center justify-center p-1">
                     {selectedImage?.id === modalEntry.id ? (
                       <img
                         src={selectedImage.url}
-                        alt={modalEntry.label || "Image"}
+                        alt={modalEntry.label || "Memory photo"}
                         loading="eager"
                         decoding="async"
-                        className="max-h-[68vh] w-full object-contain rounded-lg"
+                        className="max-h-[68vh] w-full object-contain rounded-xl"
                       />
                     ) : (
-                      <span className="text-sm text-slate-400">Loading image...</span>
+                      <span className="text-sm text-slate-400 py-8">Loading image...</span>
                     )}
                   </div>
                   {!modalPure && ocrExpandedId === modalEntry.id && modalEntry.ocr && (
-                    <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
+                    <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap bg-white/[0.03] p-3 rounded-2xl border border-white/[0.06]">
                       {modalEntry.ocr}
                     </p>
                   )}
                 </div>
               ) : (
-                <div className="mt-1">
+                <div className="mt-2">
                   <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
                     {modalEntry.content}
                   </p>
@@ -1714,11 +1608,11 @@ export default function App() {
               )}
 
               {modalTags?.length > 0 && (
-                <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                <div className="flex items-center gap-1.5 mt-3 flex-wrap">
                   {modalTags.map((tag) => (
                     <span
                       key={tag}
-                      className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 font-medium"
+                      className="text-[10px] px-2.5 py-0.5 rounded-full bg-white/[0.04] text-slate-300 border border-white/[0.06] font-medium"
                     >
                       {tag}
                     </span>
