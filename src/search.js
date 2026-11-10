@@ -3,7 +3,7 @@ import { db } from "./db.js";
 import aliasMap from "./aliasMap.json" with { type: "json" };
 import { deriveTags } from "./tagger.js";
 import { isPureImageText } from "./ocr.js";
-import { embedText } from "./services/visionService.js";
+import { embedText, isVisionModelReady } from "./services/visionService.js";
 
 export function cosineSimilarity(a, b) {
   if (!a || !b || a.length !== b.length) return 0;
@@ -27,7 +27,7 @@ const STOP_WORDS = new Set([
 const CATEGORY_TAGS = new Set([
   "#vehicle", "#document", "#contact", "#travel", "#bill", "#health", "#finance",
   "#shopping", "#security", "#reminder", "#photo", "#image", "#picture",
-  "#signature", "#sports", "#event",
+  "#signature", "#sports", "#event", "#keys", "#bag", "#wallet",
 ]);
 const TERM_SYNONYMS = {
   sign: ["sign", "signature", "autograph", "signed"],
@@ -55,7 +55,13 @@ const TERM_SYNONYMS = {
   cell: ["cell", "cellphone", "cell phone", "phone"],
   cellphone: ["cellphone", "cell phone", "phone", "mobile"],
   mobile: ["mobile", "phone", "cellphone", "cell phone"],
-  bag: ["bag", "backpack", "handbag", "suitcase"],
+  key: ["key", "keys", "keychain"],
+  keys: ["keys", "key", "keychain"],
+  keychain: ["keychain", "keys", "key"],
+  bag: ["bag", "backpack", "handbag", "suitcase", "zip", "zipper"],
+  backpack: ["backpack", "bag", "handbag"],
+  wallet: ["wallet", "purse", "moneyclip"],
+  purse: ["purse", "wallet", "bag"],
   plant: ["plant", "potted plant"],
   book: ["book"],
   bottle: ["bottle"],
@@ -143,9 +149,11 @@ export function normalizeQuery(query) {
   const explicitTags = (query.toLowerCase().match(/#[a-z0-9_]+/g) || []);
   const semanticTags = deriveTags(query).filter((tag) => tag !== "#note" || terms.includes("note"));
   const aliasTags = terms.map((term) => aliasMap[term]).filter(Boolean);
-  return Array.from(new Set([...terms, ...explicitTags, ...semanticTags, ...aliasTags]));
-}
+  // ---- NEW: auto‑detect category tags from plain words ----
+  const categoryTags = terms.filter((t) => CATEGORY_TAGS.has(t)).map((t) => `#${t}`);
+  return Array.from(new Set([...terms, ...explicitTags, ...semanticTags, ...aliasTags, ...categoryTags]));
 
+}
 let cachedEntries = [];
 let cacheLoaded = false;
 const imageThumbnailUrls = new Map();
@@ -329,6 +337,26 @@ function scoreEntry(entry, tokens) {
   return score;
 }
 
+export function lexicalSearch(rawQuery) {
+  if (!rawQuery || !rawQuery.trim()) {
+    return [...cachedEntries].sort((a, b) => b.timestamp - a.timestamp);
+  }
+
+  const tokens = normalizeQuery(rawQuery);
+  if (tokens.length === 0) return [];
+
+  const rawHits = [];
+  for (let i = 0; i < cachedEntries.length; i++) {
+    const entry = cachedEntries[i];
+    const score = scoreEntry(entry, tokens);
+    if (score > 0) {
+      rawHits.push({ ...entry, _score: score });
+    }
+  }
+
+  return filterBestOrSimilarMatches(rawHits);
+}
+
 export async function rankedSearch(rawQuery) {
   if (!cacheLoaded || cachedEntries.length === 0) {
     await refreshCache();
@@ -339,7 +367,13 @@ export async function rankedSearch(rawQuery) {
   }
 
   const tokens = normalizeQuery(rawQuery);
-  const queryVector = await embedText(rawQuery).catch(() => null);
+
+  // If the vision model is not ready (still downloading, idle, or errored),
+  // do NOT stall the user — skip vector embed and return instant lexical results!
+  let queryVector = null;
+  if (isVisionModelReady()) {
+    queryVector = await embedText(rawQuery, { timeout: 150 }).catch(() => null);
+  }
 
   const topMatches = [];
   const compareMatches = (a, b) =>
@@ -426,21 +460,16 @@ export async function fastSearch(rawQuery, onProgressHit = null) {
   }
 
   // Instant lexical pass (0ms latency for speech/text)
-  const tokens = normalizeQuery(rawQuery);
-  if (tokens.length > 0) {
-    const rawHits = cachedEntries
-      .map((entry) => ({ entry, score: scoreEntry(entry, tokens) }))
-      .filter((item) => item.score > 0)
-      .sort((a, b) => (b.score !== a.score ? b.score - a.score : b.entry.timestamp - a.entry.timestamp));
-
-    const initialHits = filterBestOrSimilarMatches(rawHits)
-      .map((item) => ({ ...(item.entry || item), _score: item.score ?? item._score }));
-
-    if (initialHits.length > 0 && typeof onProgressHit === "function") {
-      onProgressHit(initialHits);
-    }
+  const initialHits = lexicalSearch(rawQuery);
+  if (initialHits.length > 0 && typeof onProgressHit === "function") {
+    onProgressHit(initialHits);
   }
 
-  // Refined multimodal vector search
+  // If model is downloading or not ready, return instant lexical hits immediately!
+  if (!isVisionModelReady()) {
+    return initialHits;
+  }
+
+  // Refined multimodal vector search (when CLIP model is ready)
   return await rankedSearch(rawQuery);
 }

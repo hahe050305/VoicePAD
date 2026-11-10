@@ -10,6 +10,10 @@ export function subscribeVisionModelStatus(callback) {
   return () => visionStatusListeners.delete(callback);
 }
 
+export function isVisionModelReady() {
+  return visionModelStatus.state === "ready";
+}
+
 function updateVisionModelStatus(status) {
   visionModelStatus = { ...visionModelStatus, ...status };
   visionStatusListeners.forEach((listener) => listener(visionModelStatus));
@@ -30,9 +34,18 @@ export function embedImage(imageSource) {
   return runVisionTask("embedImage", imageSource);
 }
 
-/** Extract 512-dimensional normalized vector embedding from a text search query */
-export function embedText(text) {
-  return runVisionTask("embedText", text);
+/**
+ * Extract 512-dimensional normalized vector embedding from a text search query.
+ * Non-blocking: If model is still downloading or not ready, returns null immediately
+ * so search filtering is never stalled.
+ */
+export function embedText(text, { timeout = 250 } = {}) {
+  if (visionModelStatus.state !== "ready") {
+    return Promise.resolve(null);
+  }
+  const task = runVisionTask("embedText", text);
+  const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), timeout));
+  return Promise.race([task, timeoutPromise]).catch(() => null);
 }
 
 /** Backward compatibility placeholders */

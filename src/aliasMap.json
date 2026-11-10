@@ -24,6 +24,15 @@
   "rc": "#vehicle",
   "driving": "#vehicle",
 
+  "key": "#keys",
+  "keys": "#keys",
+  "keychain": "#keys",
+  "bag": "#bag",
+  "backpack": "#bag",
+  "handbag": "#bag",
+  "wallet": "#wallet",
+  "purse": "#wallet",
+
   "policy": "#policy",
   "insurance": "#policy",
   "premium": "#policy",

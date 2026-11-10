@@ -28,7 +28,9 @@ const semanticPatterns = [
   { pattern: /\b(mouse|trackpad|mousepad)\b/, tags: ["#electronics", "#tech"] },
   { pattern: /\b(headphone|headphones|earphones|airpods|earbuds)\b/, tags: ["#electronics", "#audio"] },
   { pattern: /\b(charger|cable|adapter|usb|hdmi|powerbank)\b/, tags: ["#electronics", "#tech"] },
-  { pattern: /\b(backpack|bag|handbag|rucksack|schoolbag|officebag|luggage|suitcase)\b/, tags: ["#bag", "#accessory"] },
+  { pattern: /\b(backpack|bag|handbag|rucksack|schoolbag|officebag|luggage|suitcase|zip|zipper)\b/, tags: ["#bag", "#accessory"] },
+  { pattern: /\b(key|keys|keychain|car\s*key|house\s*key|bike\s*key)\b/, tags: ["#keys"] },
+  { pattern: /\b(wallet|purse|money\s*clip)\b/, tags: ["#wallet"] },
 
   // ── Festivals & Celebrations ─────────────────────────────────────────────
   { pattern: /\b(diwali|deepavali|festival|festive|crackers|diya|lights)\b/, tags: ["#festival", "#celebration"] },

@@ -72,3 +72,9 @@ test("deriveTags detects tech company branding and does not hallucinate receipts
   assert.equal(tags.includes("#bill"), false, "Should NOT detect #bill");
   assert.equal(tags.includes("#vehicle"), false, "Should NOT detect #vehicle");
 });
+
+test("deriveTags detects keys and bag tags for manual label and voice notes", () => {
+  const tags = deriveTags("keys inside my travel bag zip");
+  assert.ok(tags.includes("#keys"), "Should detect #keys");
+  assert.ok(tags.includes("#bag"), "Should detect #bag");
+});

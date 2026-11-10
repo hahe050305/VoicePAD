@@ -1,7 +1,7 @@
 // src/App.jsx
 import { useEffect, useState, useRef, useCallback } from "react";
 import { db, seedDemoData } from "./db.js";
-import { rankedSearch, fastSearch, refreshCache, getImageThumbnailUrl, setImageThumbnailUrl, getImageSource } from "./search.js";
+import { rankedSearch, fastSearch, lexicalSearch, refreshCache, getImageThumbnailUrl, setImageThumbnailUrl, getImageSource } from "./search.js";
 import { performOCR, recognizeVehiclePlate, isPureImageText } from "./ocr.js";
 import { deriveTags } from "./tagger.js";
 import {
@@ -47,6 +47,12 @@ export default function App() {
   const [editText, setEditText] = useState("");
   const [editLabel, setEditLabel] = useState("");
   const [editingError, setEditingError] = useState("");
+
+  // Card-level Voice Note & Quick Manual Labeling Fallback state
+  const [recordingCardId, setRecordingCardId] = useState(null);
+  const cardRecognizerRef = useRef(null);
+  const [quickLabelingId, setQuickLabelingId] = useState(null);
+  const [quickLabelInput, setQuickLabelInput] = useState("");
 
   // Zoom modal state — entry selected by clicking a card
   const [selectedEntry, setSelectedEntry] = useState(null);
@@ -337,6 +343,12 @@ export default function App() {
       setVoiceTranscript(currentTranscript);
       setSearchMode("voice");
 
+      // Instant local lexical match as words are spoken
+      const instantHits = lexicalSearch(currentTranscript);
+      if (instantHits.length > 0) {
+        setFilteredEntries(instantHits);
+      }
+
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
       setIsSearching(true);
 
@@ -353,13 +365,13 @@ export default function App() {
           if (result) {
             const hits = Array.isArray(result) ? result : [result];
             setFilteredEntries(hits);
-          } else {
+          } else if (instantHits.length === 0) {
             setFilteredEntries([]);
           }
         } finally {
           setIsSearching(false);
         }
-      }, 60);
+      }, 50);
     };
 
     recognizerRef.current = recognizer;
@@ -428,7 +440,7 @@ export default function App() {
     cancelAudioCapture();
   };
 
-  // ── Live feed filtering for manual text search (debounced) ───────────────────
+  // ── Live feed filtering for manual text search (Instant zero-wait + non-blocking refinement)
   const handleLiveFilter = useCallback(
     (q) => {
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
@@ -439,15 +451,23 @@ export default function App() {
         return;
       }
       setSearchMode("text");
-      setIsSearching(true);
+
+      // 1. Instant local search filtering: 0ms latency, never waits for model downloads
+      const instantHits = lexicalSearch(q);
+      setFilteredEntries(instantHits.slice(0, 20));
+      setIsSearching(false);
+
+      // 2. Non-blocking vector re-ranking if model is ready
       searchDebounceRef.current = setTimeout(async () => {
         try {
           const ranked = await rankedSearch(q);
-          setFilteredEntries(ranked.slice(0, 20));
-        } finally {
-          setIsSearching(false);
+          if (ranked && ranked.length > 0) {
+            setFilteredEntries(ranked.slice(0, 20));
+          }
+        } catch (err) {
+          console.debug("[Search] Vector enhancement skipped:", err);
         }
-      }, 150);
+      }, 75);
     },
     [allEntries]
   );
@@ -463,12 +483,21 @@ export default function App() {
     if (!query.trim()) return;
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
     setSearchMode("text");
-    setIsSearching(true);
+
+    // Immediate instant results
+    const instantHits = lexicalSearch(query);
+    if (instantHits.length > 0) {
+      setFilteredEntries(instantHits.slice(0, 20));
+    }
+    setIsSearching(false);
+
     try {
       const ranked = await rankedSearch(query);
-      setFilteredEntries(ranked.slice(0, 20));
-    } finally {
-      setIsSearching(false);
+      if (ranked && ranked.length > 0) {
+        setFilteredEntries(ranked.slice(0, 20));
+      }
+    } catch (err) {
+      console.debug("[Search] Submit fallback:", err);
     }
   };
 
@@ -572,6 +601,139 @@ export default function App() {
     setEditText("");
     setEditLabel("");
   };
+
+  // ── Card Voice Note & Quick Labeling Secondary Fallback ─────────────────────
+  const stopCardVoiceLabel = useCallback(() => {
+    if (cardRecognizerRef.current) {
+      try {
+        cardRecognizerRef.current.stop();
+      } catch {}
+      cardRecognizerRef.current = null;
+    }
+    setRecordingCardId(null);
+  }, []);
+
+  const handleStartVoiceLabel = useCallback((entry, e) => {
+    if (e) e.stopPropagation();
+
+    if (recordingCardId === entry.id) {
+      stopCardVoiceLabel();
+      return;
+    }
+
+    stopCardVoiceLabel();
+
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setQuickLabelingId(entry.id);
+      setQuickLabelInput(entry.label || "");
+      return;
+    }
+
+    try {
+      const recognizer = new SpeechRecognition();
+      recognizer.continuous = false;
+      recognizer.interimResults = false;
+      recognizer.lang = "en-US";
+
+      recognizer.onstart = () => {
+        setRecordingCardId(entry.id);
+      };
+
+      recognizer.onerror = (event) => {
+        console.warn("[VoiceLabel] Speech recognition error:", event.error);
+        stopCardVoiceLabel();
+      };
+
+      recognizer.onend = () => {
+        setRecordingCardId(null);
+      };
+
+      recognizer.onresult = async (event) => {
+        let transcript = "";
+        for (let i = 0; i < event.results.length; i++) {
+          transcript += event.results[i][0].transcript + " ";
+        }
+        transcript = transcript.trim();
+        if (!transcript) return;
+
+        const normalized = transcript.toLowerCase().replace(/[^a-z0-9]/g, "_");
+        const derived = deriveTags(transcript);
+        const labelTags = [`#label_${normalized}`, `#${normalized}`, ...derived];
+        const existingTags = entry.tags || [];
+        const combinedTags = Array.from(new Set([...existingTags, ...labelTags, "#photo"]));
+
+        await db.images.update(entry.id, {
+          label: transcript,
+          tags: combinedTags,
+          clipFailed: false,
+        });
+
+        const updated = await refreshCache();
+        const sorted = [...updated].sort((a, b) => b.timestamp - a.timestamp);
+        setAllEntries(sorted);
+        setFilteredEntries((curr) =>
+          curr.map((item) =>
+            item.id === entry.id
+              ? { ...item, label: transcript, tags: combinedTags, clipFailed: false }
+              : item
+          )
+        );
+        if (selectedEntry?.id === entry.id) {
+          setSelectedEntry((curr) =>
+            curr ? { ...curr, label: transcript, tags: combinedTags, clipFailed: false } : curr
+          );
+        }
+        stopCardVoiceLabel();
+      };
+
+      cardRecognizerRef.current = recognizer;
+      recognizer.start();
+    } catch (err) {
+      console.warn("[VoiceLabel] Could not start speech recognizer:", err);
+      setQuickLabelingId(entry.id);
+      setQuickLabelInput(entry.label || "");
+    }
+  }, [recordingCardId, stopCardVoiceLabel, selectedEntry?.id]);
+
+  const handleSaveQuickLabel = useCallback(async (entry, labelText, e) => {
+    if (e) e.stopPropagation();
+    const cleanLabel = (labelText || quickLabelInput).trim();
+    if (!cleanLabel) return;
+
+    const normalized = cleanLabel.toLowerCase().replace(/[^a-z0-9]/g, "_");
+    const derived = deriveTags(cleanLabel);
+    const labelTags = [`#label_${normalized}`, `#${normalized}`, ...derived];
+    const existingTags = entry.tags || [];
+    const combinedTags = Array.from(new Set([...existingTags, ...labelTags, "#photo"]));
+
+    await db.images.update(entry.id, {
+      label: cleanLabel,
+      tags: combinedTags,
+      clipFailed: false,
+    });
+
+    const updated = await refreshCache();
+    const sorted = [...updated].sort((a, b) => b.timestamp - a.timestamp);
+    setAllEntries(sorted);
+    setFilteredEntries((curr) =>
+      curr.map((item) =>
+        item.id === entry.id
+          ? { ...item, label: cleanLabel, tags: combinedTags, clipFailed: false }
+          : item
+      )
+    );
+    if (selectedEntry?.id === entry.id) {
+      setSelectedEntry((curr) =>
+        curr ? { ...curr, label: cleanLabel, tags: combinedTags, clipFailed: false } : curr
+      );
+    }
+
+    setQuickLabelingId(null);
+    setQuickLabelInput("");
+  }, [quickLabelInput, selectedEntry?.id]);
 
   // ── Image Capture / Vision & OCR Pipeline ────────────────────────────────────
   const extractTagsFromText = (text) => {
@@ -718,6 +880,21 @@ export default function App() {
             })();
 
             await Promise.all([ocrPromise, embedPromise]);
+
+            // Secondary fallback check: did CLIP fail to classify this image?
+            // (e.g. keys inside bag, small/occluded items where CLIP produced no specific tags)
+            const updatedRecord = await db.images.get(entry.id);
+            const currentTags = updatedRecord?.tags || [];
+            const hasSpecificTags = currentTags.some((t) => t !== "#photo" && t !== "#image" && t !== "#picture");
+            const hasPlateOrText = Boolean(updatedRecord?.ocr?.trim() && !isPureImageText(updatedRecord?.ocr));
+            const clipFailed = !updatedRecord?.label && !hasSpecificTags && !hasPlateOrText;
+
+            if (clipFailed) {
+              await db.images.update(entry.id, { clipFailed: true });
+              const markFailed = (item) => item.id === entry.id ? { ...item, clipFailed: true } : item;
+              setFilteredEntries((curr) => curr.map(markFailed));
+              setAllEntries((curr) => curr.map(markFailed));
+            }
 
           } catch (err) {
             console.error("[Vision] Image processing failed:", err);
@@ -1089,6 +1266,14 @@ export default function App() {
                 const isPureImage =
                   entry.type === "image" &&
                   (entry.isPureImage === true || (!entry.ocr && !entry.label) || isPureImageText(entry.ocr));
+                const isClipFailed =
+                  entry.type === "image" &&
+                  (entry.clipFailed === true ||
+                    (!entry.label &&
+                      (!entry.tags ||
+                        entry.tags.length === 0 ||
+                        entry.tags.every((t) => t === "#photo" || t === "#image" || t === "#picture")) &&
+                      (!entry.ocr || !entry.ocr.trim() || isPureImageText(entry.ocr))));
 
                 return (
                   <div
@@ -1126,16 +1311,30 @@ export default function App() {
                           )}
                           {entry.label ? (
                             <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/40 text-indigo-300 flex items-center gap-1">
-                              {entry.label}
+                              🏷️ {entry.label}
                             </span>
                           ) : entry.type === "image" ? (
-                            <button
-                              onClick={(e) => startEditing(entry, e)}
-                              className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-600/40 text-amber-300 hover:bg-amber-900/90 transition flex items-center gap-1"
-                              title="Click to add a label for instant search"
-                            >
-                              + Label
-                            </button>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={(e) => startEditing(entry, e)}
+                                className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-600/40 text-amber-300 hover:bg-amber-900/90 transition flex items-center gap-1"
+                                title="Click to add a label for instant search"
+                              >
+                                + Label
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => handleStartVoiceLabel(entry, e)}
+                                className={`text-[10px] font-medium px-2 py-0.5 rounded-full border transition flex items-center gap-1 ${
+                                  recordingCardId === entry.id
+                                    ? "bg-rose-600 text-white border-rose-500 animate-pulse"
+                                    : "bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700"
+                                }`}
+                                title="Record a 2-second voice note to label this image"
+                              >
+                                🎤 {recordingCardId === entry.id ? "Listening..." : "Voice Note"}
+                              </button>
+                            </div>
                           ) : null}
                         </div>
 
@@ -1241,6 +1440,109 @@ export default function App() {
                                 </span>
                               ))}
                             </div>
+
+                            {/* Secondary Fallback Banner when CLIP failed to classify */}
+                            {isClipFailed && (
+                              <div
+                                onClick={(e) => e.stopPropagation()}
+                                className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/40 text-amber-200 flex flex-col gap-2 mt-2 shadow-inner animate-in fade-in duration-150"
+                              >
+                                <div className="flex items-center justify-between text-xs font-semibold text-amber-300">
+                                  <span className="flex items-center gap-1.5">
+                                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+                                    AI couldn't auto-tag this photo
+                                  </span>
+                                  <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-amber-900/60 border border-amber-600/50 text-amber-300">
+                                    Secondary Fallback
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                                  Small or obscured items (like keys in a bag) need a quick voice note or manual label so you can find them instantly.
+                                </p>
+
+                                {quickLabelingId === entry.id ? (
+                                  <div className="space-y-2 mt-1">
+                                    <div className="flex gap-1.5">
+                                      <input
+                                        type="text"
+                                        value={quickLabelInput}
+                                        onChange={(e) => setQuickLabelInput(e.target.value)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") {
+                                            e.preventDefault();
+                                            handleSaveQuickLabel(entry, quickLabelInput, e);
+                                          }
+                                        }}
+                                        placeholder="e.g. Keys inside bag zip..."
+                                        className="flex-1 px-2.5 py-1.5 bg-slate-950 border border-amber-500/60 rounded-lg text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                        autoFocus
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={(e) => handleSaveQuickLabel(entry, quickLabelInput, e)}
+                                        className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold rounded-lg text-xs transition"
+                                      >
+                                        Save
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setQuickLabelingId(null);
+                                        }}
+                                        className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition"
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
+
+                                    <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                                      <span className="text-[10px] text-slate-400">Quick chips:</span>
+                                      {["Keys in bag", "Car keys", "House keys", "Backpack", "Wallet", "Receipt"].map((chip) => (
+                                        <button
+                                          key={chip}
+                                          type="button"
+                                          onClick={(e) => handleSaveQuickLabel(entry, chip, e)}
+                                          className="text-[10px] px-2 py-0.5 rounded-full bg-slate-900 hover:bg-amber-900/60 text-amber-200 border border-amber-700/50 transition"
+                                        >
+                                          + {chip}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => handleStartVoiceLabel(entry, e)}
+                                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
+                                        recordingCardId === entry.id
+                                          ? "bg-rose-600 text-white animate-pulse"
+                                          : "bg-amber-500 hover:bg-amber-400 text-slate-950 shadow"
+                                      }`}
+                                      title="Record a quick voice note (e.g. 'keys in bag zip')"
+                                    >
+                                      <span>{recordingCardId === entry.id ? "⏹️ Stop" : "🎤 2-Sec Voice Note"}</span>
+                                      {recordingCardId === entry.id && (
+                                        <span className="text-[10px] font-mono text-white/90">Listening...</span>
+                                      )}
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setQuickLabelingId(entry.id);
+                                        setQuickLabelInput("");
+                                      }}
+                                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                                    >
+                                      <span>🏷️ Add Manual Label</span>
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <>
@@ -1333,15 +1635,28 @@ export default function App() {
                   )}
                   {modalEntry.label ? (
                     <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/40 text-indigo-300 flex items-center gap-1">
-                      Label: {modalEntry.label}
+                      🏷️ {modalEntry.label}
                     </span>
                   ) : modalEntry.type === "image" ? (
-                    <button
-                      onClick={() => { startEditing(modalEntry); setSelectedEntry(null); }}
-                      className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-600/40 text-amber-300 hover:bg-amber-900/90 transition flex items-center gap-1"
-                    >
-                      + Add Label
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => { startEditing(modalEntry); setSelectedEntry(null); }}
+                        className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-600/40 text-amber-300 hover:bg-amber-900/90 transition flex items-center gap-1"
+                      >
+                        + Add Label
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => handleStartVoiceLabel(modalEntry, e)}
+                        className={`text-[10px] font-medium px-2 py-0.5 rounded-full border transition flex items-center gap-1 ${
+                          recordingCardId === modalEntry.id
+                            ? "bg-rose-600 text-white border-rose-500 animate-pulse"
+                            : "bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700"
+                        }`}
+                      >
+                        🎤 {recordingCardId === modalEntry.id ? "Listening..." : "Voice Note"}
+                      </button>
+                    </div>
                   ) : null}
                 </div>
                 <div className="flex flex-col items-end gap-1.5 shrink-0">
