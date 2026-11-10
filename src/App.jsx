@@ -60,7 +60,14 @@ export default function App() {
   const [ocrExpandedId, setOcrExpandedId] = useState(null);
 
   // Quick First-Time Onboarding Screen state (persisted to avoid annoying repeat visits)
-  const [showOnboarding, setShowOnboarding] = useState(true);
+  const [showOnboarding, setShowOnboarding] = useState(() => {
+    try {
+      if (typeof window === "undefined") return true;
+      return localStorage.getItem("voicepad_onboarding_seen") !== "true";
+    } catch {
+      return true;
+    }
+  });
 
   const [onboardingSlide, setOnboardingSlide] = useState(0);
   const touchStartXRef = useRef(null);
@@ -112,91 +119,7 @@ export default function App() {
     };
     window.addEventListener("keydown", closeOnEscape);
 
-    // Render onboarding first if needed
-  if (showOnboarding) {
-    return (
-      <div
-        onTouchStart={handleTouchStart}
-        onTouchEnd={handleTouchEnd}
-        className="fixed inset-0 z-[100] bg-[#07090e] text-slate-100 flex flex-col justify-between p-6 sm:p-8 animate-in fade-in duration-300 select-none overflow-hidden"
-      >
-        {/* Ambient Glow Orbs */}
-        <div className="fixed top-[-100px] left-1/2 -translate-x-1/2 w-[520px] h-[360px] bg-indigo-600/20 blur-[130px] pointer-events-none rounded-full" />
-        <div className="fixed bottom-[-80px] right-[-80px] w-[360px] h-[360px] bg-violet-600/15 blur-[120px] pointer-events-none rounded-full" />
-
-        {/* Top Bar: Brand + Skip */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex items-center justify-between pt-2">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/25">
-              <span className="text-white text-sm">✦</span>
-            </div>
-            <span className="text-sm font-semibold tracking-tight text-white/95">VoicePad</span>
-          </div>
-          <button
-            type="button"
-            onClick={dismissOnboarding}
-            className="text-xs font-semibold text-slate-400 hover:text-white px-3.5 py-1.5 rounded-full bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] transition active:scale-95"
-          >
-            Skip
-          </button>
-        </div>
-
-        {/* Slide Content Area */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex-1 flex flex-col items-center justify-center py-6">
-          {onboardingSlide === 0 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 0 content kept as is */}
-            </div>
-          )}
-          {onboardingSlide === 1 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 1 content kept as is */}
-            </div>
-          )}
-          {onboardingSlide === 2 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 2 content kept as is */}
-            </div>
-          )}
-        </div>
-
-        {/* Bottom Controls */}
-        <div className="relative z-10 w-full max-w-md mx-auto space-y-4 pb-2">
-          <div className="flex items-center justify-center gap-2">
-            {[0, 1, 2].map((idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => setOnboardingSlide(idx)}
-                className={`h-1.5 rounded-full transition-all duration-300 ${onboardingSlide === idx ? 'w-8 bg-indigo-500 shadow-md shadow-indigo-500/50' : 'w-2 bg-white/20 hover:bg-white/40'}`}
-                aria-label={`Go to slide ${idx + 1}`}
-              />
-            ))}
-          </div>
-          {onboardingSlide < 2 ? (
-            <button
-              type="button"
-              onClick={() => setOnboardingSlide((prev) => prev + 1)}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-semibold shadow-xl shadow-indigo-500/25 transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>Continue</span>
-              <span className="text-base">➔</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={dismissOnboarding}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-500 via-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-bold shadow-xl shadow-indigo-500/30 transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>Get Started</span>
-              <span className="text-base">🚀</span>
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-  return () => {
+    return () => {
       window.removeEventListener("keydown", closeOnEscape);
       root.style.overflow = previousRootOverflow;
       body.style.overflow = previousBodyOverflow;
@@ -225,91 +148,7 @@ export default function App() {
         console.error("[Image] Could not load full-size image:", error);
       });
 
-    // Render onboarding first if needed
-  if (showOnboarding) {
-    return (
-      <div
-        onTouchStart={handleTouchStart}
-        onTouchEnd={handleTouchEnd}
-        className="fixed inset-0 z-[100] bg-[#07090e] text-slate-100 flex flex-col justify-between p-6 sm:p-8 animate-in fade-in duration-300 select-none overflow-hidden"
-      >
-        {/* Ambient Glow Orbs */}
-        <div className="fixed top-[-100px] left-1/2 -translate-x-1/2 w-[520px] h-[360px] bg-indigo-600/20 blur-[130px] pointer-events-none rounded-full" />
-        <div className="fixed bottom-[-80px] right-[-80px] w-[360px] h-[360px] bg-violet-600/15 blur-[120px] pointer-events-none rounded-full" />
-
-        {/* Top Bar: Brand + Skip */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex items-center justify-between pt-2">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/25">
-              <span className="text-white text-sm">✦</span>
-            </div>
-            <span className="text-sm font-semibold tracking-tight text-white/95">VoicePad</span>
-          </div>
-          <button
-            type="button"
-            onClick={dismissOnboarding}
-            className="text-xs font-semibold text-slate-400 hover:text-white px-3.5 py-1.5 rounded-full bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] transition active:scale-95"
-          >
-            Skip
-          </button>
-        </div>
-
-        {/* Slide Content Area */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex-1 flex flex-col items-center justify-center py-6">
-          {onboardingSlide === 0 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 0 content kept as is */}
-            </div>
-          )}
-          {onboardingSlide === 1 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 1 content kept as is */}
-            </div>
-          )}
-          {onboardingSlide === 2 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 2 content kept as is */}
-            </div>
-          )}
-        </div>
-
-        {/* Bottom Controls */}
-        <div className="relative z-10 w-full max-w-md mx-auto space-y-4 pb-2">
-          <div className="flex items-center justify-center gap-2">
-            {[0, 1, 2].map((idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => setOnboardingSlide(idx)}
-                className={`h-1.5 rounded-full transition-all duration-300 ${onboardingSlide === idx ? 'w-8 bg-indigo-500 shadow-md shadow-indigo-500/50' : 'w-2 bg-white/20 hover:bg-white/40'}`}
-                aria-label={`Go to slide ${idx + 1}`}
-              />
-            ))}
-          </div>
-          {onboardingSlide < 2 ? (
-            <button
-              type="button"
-              onClick={() => setOnboardingSlide((prev) => prev + 1)}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-semibold shadow-xl shadow-indigo-500/25 transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>Continue</span>
-              <span className="text-base">➔</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={dismissOnboarding}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-500 via-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-bold shadow-xl shadow-indigo-500/30 transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>Get Started</span>
-              <span className="text-base">🚀</span>
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-  return () => {
+    return () => {
       cancelled = true;
       if (imageUrl?.startsWith("blob:")) URL.revokeObjectURL(imageUrl);
     };
@@ -395,91 +234,7 @@ export default function App() {
 
     const unsubscribeMoonshine = subscribeMoonshineStatus(setMoonshineStatus);
 
-    // Render onboarding first if needed
-  if (showOnboarding) {
-    return (
-      <div
-        onTouchStart={handleTouchStart}
-        onTouchEnd={handleTouchEnd}
-        className="fixed inset-0 z-[100] bg-[#07090e] text-slate-100 flex flex-col justify-between p-6 sm:p-8 animate-in fade-in duration-300 select-none overflow-hidden"
-      >
-        {/* Ambient Glow Orbs */}
-        <div className="fixed top-[-100px] left-1/2 -translate-x-1/2 w-[520px] h-[360px] bg-indigo-600/20 blur-[130px] pointer-events-none rounded-full" />
-        <div className="fixed bottom-[-80px] right-[-80px] w-[360px] h-[360px] bg-violet-600/15 blur-[120px] pointer-events-none rounded-full" />
-
-        {/* Top Bar: Brand + Skip */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex items-center justify-between pt-2">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/25">
-              <span className="text-white text-sm">✦</span>
-            </div>
-            <span className="text-sm font-semibold tracking-tight text-white/95">VoicePad</span>
-          </div>
-          <button
-            type="button"
-            onClick={dismissOnboarding}
-            className="text-xs font-semibold text-slate-400 hover:text-white px-3.5 py-1.5 rounded-full bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] transition active:scale-95"
-          >
-            Skip
-          </button>
-        </div>
-
-        {/* Slide Content Area */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex-1 flex flex-col items-center justify-center py-6">
-          {onboardingSlide === 0 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 0 content kept as is */}
-            </div>
-          )}
-          {onboardingSlide === 1 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 1 content kept as is */}
-            </div>
-          )}
-          {onboardingSlide === 2 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 2 content kept as is */}
-            </div>
-          )}
-        </div>
-
-        {/* Bottom Controls */}
-        <div className="relative z-10 w-full max-w-md mx-auto space-y-4 pb-2">
-          <div className="flex items-center justify-center gap-2">
-            {[0, 1, 2].map((idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => setOnboardingSlide(idx)}
-                className={`h-1.5 rounded-full transition-all duration-300 ${onboardingSlide === idx ? 'w-8 bg-indigo-500 shadow-md shadow-indigo-500/50' : 'w-2 bg-white/20 hover:bg-white/40'}`}
-                aria-label={`Go to slide ${idx + 1}`}
-              />
-            ))}
-          </div>
-          {onboardingSlide < 2 ? (
-            <button
-              type="button"
-              onClick={() => setOnboardingSlide((prev) => prev + 1)}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-semibold shadow-xl shadow-indigo-500/25 transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>Continue</span>
-              <span className="text-base">➔</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={dismissOnboarding}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-500 via-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-bold shadow-xl shadow-indigo-500/30 transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>Get Started</span>
-              <span className="text-base">🚀</span>
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-  return () => {
+    return () => {
       unsubscribeVisionStatus();
       unsubscribeMoonshine();
     };
@@ -659,91 +414,7 @@ export default function App() {
 
     recognizerRef.current = recognizer;
 
-    // Render onboarding first if needed
-  if (showOnboarding) {
-    return (
-      <div
-        onTouchStart={handleTouchStart}
-        onTouchEnd={handleTouchEnd}
-        className="fixed inset-0 z-[100] bg-[#07090e] text-slate-100 flex flex-col justify-between p-6 sm:p-8 animate-in fade-in duration-300 select-none overflow-hidden"
-      >
-        {/* Ambient Glow Orbs */}
-        <div className="fixed top-[-100px] left-1/2 -translate-x-1/2 w-[520px] h-[360px] bg-indigo-600/20 blur-[130px] pointer-events-none rounded-full" />
-        <div className="fixed bottom-[-80px] right-[-80px] w-[360px] h-[360px] bg-violet-600/15 blur-[120px] pointer-events-none rounded-full" />
-
-        {/* Top Bar: Brand + Skip */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex items-center justify-between pt-2">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/25">
-              <span className="text-white text-sm">✦</span>
-            </div>
-            <span className="text-sm font-semibold tracking-tight text-white/95">VoicePad</span>
-          </div>
-          <button
-            type="button"
-            onClick={dismissOnboarding}
-            className="text-xs font-semibold text-slate-400 hover:text-white px-3.5 py-1.5 rounded-full bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] transition active:scale-95"
-          >
-            Skip
-          </button>
-        </div>
-
-        {/* Slide Content Area */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex-1 flex flex-col items-center justify-center py-6">
-          {onboardingSlide === 0 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 0 content kept as is */}
-            </div>
-          )}
-          {onboardingSlide === 1 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 1 content kept as is */}
-            </div>
-          )}
-          {onboardingSlide === 2 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 2 content kept as is */}
-            </div>
-          )}
-        </div>
-
-        {/* Bottom Controls */}
-        <div className="relative z-10 w-full max-w-md mx-auto space-y-4 pb-2">
-          <div className="flex items-center justify-center gap-2">
-            {[0, 1, 2].map((idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => setOnboardingSlide(idx)}
-                className={`h-1.5 rounded-full transition-all duration-300 ${onboardingSlide === idx ? 'w-8 bg-indigo-500 shadow-md shadow-indigo-500/50' : 'w-2 bg-white/20 hover:bg-white/40'}`}
-                aria-label={`Go to slide ${idx + 1}`}
-              />
-            ))}
-          </div>
-          {onboardingSlide < 2 ? (
-            <button
-              type="button"
-              onClick={() => setOnboardingSlide((prev) => prev + 1)}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-semibold shadow-xl shadow-indigo-500/25 transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>Continue</span>
-              <span className="text-base">➔</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={dismissOnboarding}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-500 via-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-bold shadow-xl shadow-indigo-500/30 transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>Get Started</span>
-              <span className="text-base">🚀</span>
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-  return () => {
+    return () => {
       stopAudioPipeline();
     };
   }, [hasVoiceEnergy, stopAudioPipeline]);
@@ -1318,13 +989,12 @@ export default function App() {
     new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
   // ── Render ──────────────────────────────────────────────────────────────────
-  // Render onboarding first if needed
   if (showOnboarding) {
     return (
       <div
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
-        className="fixed inset-0 z-[100] bg-[#07090e] text-slate-100 flex flex-col justify-between p-6 sm:p-8 animate-in fade-in duration-300 select-none overflow-hidden"
+        className="fixed inset-0 z-[100] bg-[#07090e] text-slate-100 flex flex-col justify-between p-6 sm:p-8 select-none overflow-hidden"
       >
         {/* Ambient Glow Orbs */}
         <div className="fixed top-[-100px] left-1/2 -translate-x-1/2 w-[520px] h-[360px] bg-indigo-600/20 blur-[130px] pointer-events-none rounded-full" />
@@ -1347,21 +1017,88 @@ export default function App() {
           </button>
         </div>
 
-        {/* Slide Content Area */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex-1 flex flex-col items-center justify-center py-6">
+        {/* Slide Content */}
+        <div className="relative z-10 w-full max-w-md mx-auto flex-1 flex flex-col items-center justify-center py-6 text-center">
           {onboardingSlide === 0 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 0 content kept as is */}
+            <div className="flex flex-col items-center animate-in fade-in zoom-in-95 duration-200">
+              <div className="relative my-6">
+                <div className="w-32 h-32 rounded-3xl bg-gradient-to-tr from-indigo-600/25 to-violet-600/10 border border-indigo-500/30 flex items-center justify-center shadow-2xl shadow-indigo-500/20">
+                  <div className="w-20 h-20 rounded-2xl bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/40">
+                    <svg className="w-10 h-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 00-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                    </svg>
+                  </div>
+                </div>
+                <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 px-3 py-1 bg-indigo-500/20 border border-indigo-400/40 rounded-full text-[10px] font-semibold text-indigo-300 backdrop-blur-md whitespace-nowrap">
+                  Instant Voice Recall
+                </span>
+              </div>
+              <h2 className="text-2xl font-bold tracking-tight text-white mb-2 leading-tight">
+                Speak Naturally, <br />
+                <span className="bg-gradient-to-r from-indigo-400 to-violet-300 bg-clip-text text-transparent">Find in Milliseconds</span>
+              </h2>
+              <p className="text-xs text-slate-400 max-w-xs leading-relaxed mb-6">
+                In a rush or panic moment? Just tap the orb and speak. VoicePad pinpoints vehicle plates, keys, and important notes in milliseconds.
+              </p>
+              <div className="flex items-center gap-2 flex-wrap justify-center">
+                <span className="text-[10px] font-medium px-2.5 py-1 rounded-full bg-white/[0.04] text-slate-300 border border-white/[0.08]">⚡ Zero Search Delay</span>
+                <span className="text-[10px] font-medium px-2.5 py-1 rounded-full bg-white/[0.04] text-slate-300 border border-white/[0.08]">🎙️ Accent & Slang Tolerant</span>
+              </div>
             </div>
           )}
           {onboardingSlide === 1 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 1 content kept as is */}
+            <div className="flex flex-col items-center animate-in fade-in zoom-in-95 duration-200">
+              <div className="relative my-6">
+                <div className="w-32 h-32 rounded-3xl bg-gradient-to-tr from-purple-600/25 to-pink-600/10 border border-purple-500/30 flex items-center justify-center shadow-2xl shadow-purple-500/20">
+                  <div className="w-20 h-20 rounded-2xl bg-gradient-to-tr from-purple-600 to-pink-600 flex items-center justify-center shadow-lg shadow-purple-500/40">
+                    <svg className="w-10 h-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                  </div>
+                </div>
+                <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 px-3 py-1 bg-purple-500/20 border border-purple-400/40 rounded-full text-[10px] font-semibold text-purple-300 backdrop-blur-md whitespace-nowrap">
+                  Smart Vision & Text
+                </span>
+              </div>
+              <h2 className="text-2xl font-bold tracking-tight text-white mb-2 leading-tight">
+                Snap Anything, <br />
+                <span className="bg-gradient-to-r from-purple-400 to-pink-300 bg-clip-text text-transparent">Forget Nothing</span>
+              </h2>
+              <p className="text-xs text-slate-400 max-w-xs leading-relaxed mb-6">
+                Snap vehicle registration plates, doctor notes, or receipts. Visual AI tags objects automatically. Small hidden item? Add a 2-sec voice note.
+              </p>
+              <div className="flex items-center gap-2 flex-wrap justify-center">
+                <span className="text-[10px] font-medium px-2.5 py-1 rounded-full bg-white/[0.04] text-slate-300 border border-white/[0.08]">📷 Smart Text Extraction</span>
+                <span className="text-[10px] font-medium px-2.5 py-1 rounded-full bg-white/[0.04] text-slate-300 border border-white/[0.08]">🏷️ 2-Sec Voice Note Fallback</span>
+              </div>
             </div>
           )}
           {onboardingSlide === 2 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 2 content kept as is */}
+            <div className="flex flex-col items-center animate-in fade-in zoom-in-95 duration-200">
+              <div className="relative my-6">
+                <div className="w-32 h-32 rounded-3xl bg-gradient-to-tr from-emerald-600/25 to-teal-600/10 border border-emerald-500/30 flex items-center justify-center shadow-2xl shadow-emerald-500/20">
+                  <div className="w-20 h-20 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-600 flex items-center justify-center shadow-lg shadow-emerald-500/40">
+                    <svg className="w-10 h-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                    </svg>
+                  </div>
+                </div>
+                <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 px-3 py-1 bg-emerald-500/20 border border-emerald-400/40 rounded-full text-[10px] font-semibold text-emerald-300 backdrop-blur-md whitespace-nowrap">
+                  100% On-Device
+                </span>
+              </div>
+              <h2 className="text-2xl font-bold tracking-tight text-white mb-2 leading-tight">
+                Air-Gapped Privacy, <br />
+                <span className="bg-gradient-to-r from-emerald-400 to-teal-300 bg-clip-text text-transparent">Zero Cloud Delay</span>
+              </h2>
+              <p className="text-xs text-slate-400 max-w-xs leading-relaxed mb-6">
+                Your memories, photos, and voice notes stay completely on your phone. No logins, no tracking, and fully functional without internet.
+              </p>
+              <div className="flex items-center gap-2 flex-wrap justify-center">
+                <span className="text-[10px] font-medium px-2.5 py-1 rounded-full bg-white/[0.04] text-slate-300 border border-white/[0.08]">🔒 Never Leaves Device</span>
+                <span className="text-[10px] font-medium px-2.5 py-1 rounded-full bg-white/[0.04] text-slate-300 border border-white/[0.08]">📶 Works Fully Offline</span>
+              </div>
             </div>
           )}
         </div>
@@ -1374,7 +1111,7 @@ export default function App() {
                 key={idx}
                 type="button"
                 onClick={() => setOnboardingSlide(idx)}
-                className={`h-1.5 rounded-full transition-all duration-300 ${onboardingSlide === idx ? 'w-8 bg-indigo-500 shadow-md shadow-indigo-500/50' : 'w-2 bg-white/20 hover:bg-white/40'}`}
+                className={`h-1.5 rounded-full transition-all duration-300 ${onboardingSlide === idx ? "w-8 bg-indigo-500 shadow-md shadow-indigo-500/50" : "w-2 bg-white/20 hover:bg-white/40"}`}
                 aria-label={`Go to slide ${idx + 1}`}
               />
             ))}
@@ -1402,6 +1139,7 @@ export default function App() {
       </div>
     );
   }
+
   return (
     <div className="min-h-screen bg-[#07090e] text-slate-100 flex flex-col items-center px-4 py-6 antialiased selection:bg-indigo-500 selection:text-white relative overflow-x-hidden">
       {/* Ambient background glows */}
@@ -1679,260 +1417,8 @@ export default function App() {
                         entry.tags.every((t) => t === "#photo" || t === "#image" || t === "#picture")) &&
                       (!entry.ocr || !entry.ocr.trim() || isPureImageText(entry.ocr))));
 
-                // Render onboarding first if needed
-      if (showOnboarding) {
-        // Render onboarding first if needed
-  if (showOnboarding) {
-    return (
-      <div
-        onTouchStart={handleTouchStart}
-        onTouchEnd={handleTouchEnd}
-        className="fixed inset-0 z-[100] bg-[#07090e] text-slate-100 flex flex-col justify-between p-6 sm:p-8 animate-in fade-in duration-300 select-none overflow-hidden"
-      >
-        {/* Ambient Glow Orbs */}
-        <div className="fixed top-[-100px] left-1/2 -translate-x-1/2 w-[520px] h-[360px] bg-indigo-600/20 blur-[130px] pointer-events-none rounded-full" />
-        <div className="fixed bottom-[-80px] right-[-80px] w-[360px] h-[360px] bg-violet-600/15 blur-[120px] pointer-events-none rounded-full" />
 
-        {/* Top Bar: Brand + Skip */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex items-center justify-between pt-2">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/25">
-              <span className="text-white text-sm">✦</span>
-            </div>
-            <span className="text-sm font-semibold tracking-tight text-white/95">VoicePad</span>
-          </div>
-          <button
-            type="button"
-            onClick={dismissOnboarding}
-            className="text-xs font-semibold text-slate-400 hover:text-white px-3.5 py-1.5 rounded-full bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] transition active:scale-95"
-          >
-            Skip
-          </button>
-        </div>
-
-        {/* Slide Content Area */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex-1 flex flex-col items-center justify-center py-6">
-          {onboardingSlide === 0 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 0 content kept as is */}
-            </div>
-          )}
-          {onboardingSlide === 1 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 1 content kept as is */}
-            </div>
-          )}
-          {onboardingSlide === 2 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 2 content kept as is */}
-            </div>
-          )}
-        </div>
-
-        {/* Bottom Controls */}
-        <div className="relative z-10 w-full max-w-md mx-auto space-y-4 pb-2">
-          <div className="flex items-center justify-center gap-2">
-            {[0, 1, 2].map((idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => setOnboardingSlide(idx)}
-                className={`h-1.5 rounded-full transition-all duration-300 ${onboardingSlide === idx ? 'w-8 bg-indigo-500 shadow-md shadow-indigo-500/50' : 'w-2 bg-white/20 hover:bg-white/40'}`}
-                aria-label={`Go to slide ${idx + 1}`}
-              />
-            ))}
-          </div>
-          {onboardingSlide < 2 ? (
-            <button
-              type="button"
-              onClick={() => setOnboardingSlide((prev) => prev + 1)}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-semibold shadow-xl shadow-indigo-500/25 transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>Continue</span>
-              <span className="text-base">➔</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={dismissOnboarding}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-500 via-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-bold shadow-xl shadow-indigo-500/30 transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>Get Started</span>
-              <span className="text-base">🚀</span>
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-  return (
-          <div
-            onTouchStart={handleTouchStart}
-            onTouchEnd={handleTouchEnd}
-            className="fixed inset-0 z-[100] bg-[#07090e] text-slate-100 flex flex-col justify-between p-6 sm:p-8 animate-in fade-in duration-300 select-none overflow-hidden"
-          >
-            {/* Ambient Glow Orbs */}
-            <div className="fixed top-[-100px] left-1/2 -translate-x-1/2 w-[520px] h-[360px] bg-indigo-600/20 blur-[130px] pointer-events-none rounded-full" />
-            <div className="fixed bottom-[-80px] right-[-80px] w-[360px] h-[360px] bg-violet-600/15 blur-[120px] pointer-events-none rounded-full" />
-
-            {/* Top Bar: Brand + Skip */}
-            <div className="relative z-10 w-full max-w-md mx-auto flex items-center justify-between pt-2">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/25">
-                  <span className="text-white text-sm">✦</span>
-                </div>
-                <span className="text-sm font-semibold tracking-tight text-white/95">VoicePad</span>
-              </div>
-              <button
-                type="button"
-                onClick={dismissOnboarding}
-                className="text-xs font-semibold text-slate-400 hover:text-white px-3.5 py-1.5 rounded-full bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] transition active:scale-95"
-              >
-                Skip
-              </button>
-            </div>
-
-            {/* Slide Content Area */}
-            <div className="relative z-10 w-full max-w-md mx-auto flex-1 flex flex-col items-center justify-center py-6">
-              {onboardingSlide === 0 && (
-                <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-                  {/* Slide 0 content (kept as is) */}
-                  {/* ... (original slide markup) ... */}
-                </div>
-              )}
-              {onboardingSlide === 1 && (
-                <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-                  {/* Slide 1 content (kept as is) */}
-                </div>
-              )}
-              {onboardingSlide === 2 && (
-                <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-                  {/* Slide 2 content (kept as is) */}
-                </div>
-              )}
-            </div>
-
-            {/* Bottom Controls */}
-            <div className="relative z-10 w-full max-w-md mx-auto space-y-4 pb-2">
-              <div className="flex items-center justify-center gap-2">
-                {[0, 1, 2].map((idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => setOnboardingSlide(idx)}
-                    className={`h-1.5 rounded-full transition-all duration-300 ${onboardingSlide === idx ? 'w-8 bg-indigo-500 shadow-md shadow-indigo-500/50' : 'w-2 bg-white/20 hover:bg-white/40'}`}
-                    aria-label={`Go to slide ${idx + 1}`}
-                  />
-                ))}
-              </div>
-              {onboardingSlide < 2 ? (
-                <button
-                  type="button"
-                  onClick={() => setOnboardingSlide((prev) => prev + 1)}
-                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-semibold shadow-xl shadow-indigo-500/25 transition active:scale-95 flex items-center justify-center gap-2"
-                >
-                  <span>Continue</span>
-                  <span className="text-base">➔</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={dismissOnboarding}
-                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-500 via-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-bold shadow-xl shadow-indigo-500/30 transition active:scale-95 flex items-center justify-center gap-2"
-                >
-                  <span>Get Started</span>
-                  <span className="text-base">🚀</span>
-                </button>
-              )}
-            </div>
-          </div>
-        );
-      }
-      // Render onboarding first if needed
-  if (showOnboarding) {
-    return (
-      <div
-        onTouchStart={handleTouchStart}
-        onTouchEnd={handleTouchEnd}
-        className="fixed inset-0 z-[100] bg-[#07090e] text-slate-100 flex flex-col justify-between p-6 sm:p-8 animate-in fade-in duration-300 select-none overflow-hidden"
-      >
-        {/* Ambient Glow Orbs */}
-        <div className="fixed top-[-100px] left-1/2 -translate-x-1/2 w-[520px] h-[360px] bg-indigo-600/20 blur-[130px] pointer-events-none rounded-full" />
-        <div className="fixed bottom-[-80px] right-[-80px] w-[360px] h-[360px] bg-violet-600/15 blur-[120px] pointer-events-none rounded-full" />
-
-        {/* Top Bar: Brand + Skip */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex items-center justify-between pt-2">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/25">
-              <span className="text-white text-sm">✦</span>
-            </div>
-            <span className="text-sm font-semibold tracking-tight text-white/95">VoicePad</span>
-          </div>
-          <button
-            type="button"
-            onClick={dismissOnboarding}
-            className="text-xs font-semibold text-slate-400 hover:text-white px-3.5 py-1.5 rounded-full bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] transition active:scale-95"
-          >
-            Skip
-          </button>
-        </div>
-
-        {/* Slide Content Area */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex-1 flex flex-col items-center justify-center py-6">
-          {onboardingSlide === 0 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 0 content kept as is */}
-            </div>
-          )}
-          {onboardingSlide === 1 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 1 content kept as is */}
-            </div>
-          )}
-          {onboardingSlide === 2 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 2 content kept as is */}
-            </div>
-          )}
-        </div>
-
-        {/* Bottom Controls */}
-        <div className="relative z-10 w-full max-w-md mx-auto space-y-4 pb-2">
-          <div className="flex items-center justify-center gap-2">
-            {[0, 1, 2].map((idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => setOnboardingSlide(idx)}
-                className={`h-1.5 rounded-full transition-all duration-300 ${onboardingSlide === idx ? 'w-8 bg-indigo-500 shadow-md shadow-indigo-500/50' : 'w-2 bg-white/20 hover:bg-white/40'}`}
-                aria-label={`Go to slide ${idx + 1}`}
-              />
-            ))}
-          </div>
-          {onboardingSlide < 2 ? (
-            <button
-              type="button"
-              onClick={() => setOnboardingSlide((prev) => prev + 1)}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-semibold shadow-xl shadow-indigo-500/25 transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>Continue</span>
-              <span className="text-base">➔</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={dismissOnboarding}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-500 via-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-bold shadow-xl shadow-indigo-500/30 transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>Get Started</span>
-              <span className="text-base">🚀</span>
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-  return (
+                return (
                   <div
                     key={entry.id}
                     onClick={() => {
@@ -2229,260 +1715,7 @@ export default function App() {
           (modalEntry.isPureImage === true || (!modalEntry.ocr && !modalEntry.label) || isPureImageText(modalEntry.ocr));
         const modalTags = modalEntry.tags || [];
 
-        // Render onboarding first if needed
-      if (showOnboarding) {
-        // Render onboarding first if needed
-  if (showOnboarding) {
-    return (
-      <div
-        onTouchStart={handleTouchStart}
-        onTouchEnd={handleTouchEnd}
-        className="fixed inset-0 z-[100] bg-[#07090e] text-slate-100 flex flex-col justify-between p-6 sm:p-8 animate-in fade-in duration-300 select-none overflow-hidden"
-      >
-        {/* Ambient Glow Orbs */}
-        <div className="fixed top-[-100px] left-1/2 -translate-x-1/2 w-[520px] h-[360px] bg-indigo-600/20 blur-[130px] pointer-events-none rounded-full" />
-        <div className="fixed bottom-[-80px] right-[-80px] w-[360px] h-[360px] bg-violet-600/15 blur-[120px] pointer-events-none rounded-full" />
-
-        {/* Top Bar: Brand + Skip */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex items-center justify-between pt-2">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/25">
-              <span className="text-white text-sm">✦</span>
-            </div>
-            <span className="text-sm font-semibold tracking-tight text-white/95">VoicePad</span>
-          </div>
-          <button
-            type="button"
-            onClick={dismissOnboarding}
-            className="text-xs font-semibold text-slate-400 hover:text-white px-3.5 py-1.5 rounded-full bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] transition active:scale-95"
-          >
-            Skip
-          </button>
-        </div>
-
-        {/* Slide Content Area */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex-1 flex flex-col items-center justify-center py-6">
-          {onboardingSlide === 0 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 0 content kept as is */}
-            </div>
-          )}
-          {onboardingSlide === 1 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 1 content kept as is */}
-            </div>
-          )}
-          {onboardingSlide === 2 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 2 content kept as is */}
-            </div>
-          )}
-        </div>
-
-        {/* Bottom Controls */}
-        <div className="relative z-10 w-full max-w-md mx-auto space-y-4 pb-2">
-          <div className="flex items-center justify-center gap-2">
-            {[0, 1, 2].map((idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => setOnboardingSlide(idx)}
-                className={`h-1.5 rounded-full transition-all duration-300 ${onboardingSlide === idx ? 'w-8 bg-indigo-500 shadow-md shadow-indigo-500/50' : 'w-2 bg-white/20 hover:bg-white/40'}`}
-                aria-label={`Go to slide ${idx + 1}`}
-              />
-            ))}
-          </div>
-          {onboardingSlide < 2 ? (
-            <button
-              type="button"
-              onClick={() => setOnboardingSlide((prev) => prev + 1)}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-semibold shadow-xl shadow-indigo-500/25 transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>Continue</span>
-              <span className="text-base">➔</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={dismissOnboarding}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-500 via-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-bold shadow-xl shadow-indigo-500/30 transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>Get Started</span>
-              <span className="text-base">🚀</span>
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-  return (
-          <div
-            onTouchStart={handleTouchStart}
-            onTouchEnd={handleTouchEnd}
-            className="fixed inset-0 z-[100] bg-[#07090e] text-slate-100 flex flex-col justify-between p-6 sm:p-8 animate-in fade-in duration-300 select-none overflow-hidden"
-          >
-            {/* Ambient Glow Orbs */}
-            <div className="fixed top-[-100px] left-1/2 -translate-x-1/2 w-[520px] h-[360px] bg-indigo-600/20 blur-[130px] pointer-events-none rounded-full" />
-            <div className="fixed bottom-[-80px] right-[-80px] w-[360px] h-[360px] bg-violet-600/15 blur-[120px] pointer-events-none rounded-full" />
-
-            {/* Top Bar: Brand + Skip */}
-            <div className="relative z-10 w-full max-w-md mx-auto flex items-center justify-between pt-2">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/25">
-                  <span className="text-white text-sm">✦</span>
-                </div>
-                <span className="text-sm font-semibold tracking-tight text-white/95">VoicePad</span>
-              </div>
-              <button
-                type="button"
-                onClick={dismissOnboarding}
-                className="text-xs font-semibold text-slate-400 hover:text-white px-3.5 py-1.5 rounded-full bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] transition active:scale-95"
-              >
-                Skip
-              </button>
-            </div>
-
-            {/* Slide Content Area */}
-            <div className="relative z-10 w-full max-w-md mx-auto flex-1 flex flex-col items-center justify-center py-6">
-              {onboardingSlide === 0 && (
-                <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-                  {/* Slide 0 content (kept as is) */}
-                  {/* ... (original slide markup) ... */}
-                </div>
-              )}
-              {onboardingSlide === 1 && (
-                <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-                  {/* Slide 1 content (kept as is) */}
-                </div>
-              )}
-              {onboardingSlide === 2 && (
-                <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-                  {/* Slide 2 content (kept as is) */}
-                </div>
-              )}
-            </div>
-
-            {/* Bottom Controls */}
-            <div className="relative z-10 w-full max-w-md mx-auto space-y-4 pb-2">
-              <div className="flex items-center justify-center gap-2">
-                {[0, 1, 2].map((idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => setOnboardingSlide(idx)}
-                    className={`h-1.5 rounded-full transition-all duration-300 ${onboardingSlide === idx ? 'w-8 bg-indigo-500 shadow-md shadow-indigo-500/50' : 'w-2 bg-white/20 hover:bg-white/40'}`}
-                    aria-label={`Go to slide ${idx + 1}`}
-                  />
-                ))}
-              </div>
-              {onboardingSlide < 2 ? (
-                <button
-                  type="button"
-                  onClick={() => setOnboardingSlide((prev) => prev + 1)}
-                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-semibold shadow-xl shadow-indigo-500/25 transition active:scale-95 flex items-center justify-center gap-2"
-                >
-                  <span>Continue</span>
-                  <span className="text-base">➔</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={dismissOnboarding}
-                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-500 via-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-bold shadow-xl shadow-indigo-500/30 transition active:scale-95 flex items-center justify-center gap-2"
-                >
-                  <span>Get Started</span>
-                  <span className="text-base">🚀</span>
-                </button>
-              )}
-            </div>
-          </div>
-        );
-      }
-      // Render onboarding first if needed
-  if (showOnboarding) {
-    return (
-      <div
-        onTouchStart={handleTouchStart}
-        onTouchEnd={handleTouchEnd}
-        className="fixed inset-0 z-[100] bg-[#07090e] text-slate-100 flex flex-col justify-between p-6 sm:p-8 animate-in fade-in duration-300 select-none overflow-hidden"
-      >
-        {/* Ambient Glow Orbs */}
-        <div className="fixed top-[-100px] left-1/2 -translate-x-1/2 w-[520px] h-[360px] bg-indigo-600/20 blur-[130px] pointer-events-none rounded-full" />
-        <div className="fixed bottom-[-80px] right-[-80px] w-[360px] h-[360px] bg-violet-600/15 blur-[120px] pointer-events-none rounded-full" />
-
-        {/* Top Bar: Brand + Skip */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex items-center justify-between pt-2">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/25">
-              <span className="text-white text-sm">✦</span>
-            </div>
-            <span className="text-sm font-semibold tracking-tight text-white/95">VoicePad</span>
-          </div>
-          <button
-            type="button"
-            onClick={dismissOnboarding}
-            className="text-xs font-semibold text-slate-400 hover:text-white px-3.5 py-1.5 rounded-full bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] transition active:scale-95"
-          >
-            Skip
-          </button>
-        </div>
-
-        {/* Slide Content Area */}
-        <div className="relative z-10 w-full max-w-md mx-auto flex-1 flex flex-col items-center justify-center py-6">
-          {onboardingSlide === 0 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 0 content kept as is */}
-            </div>
-          )}
-          {onboardingSlide === 1 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 1 content kept as is */}
-            </div>
-          )}
-          {onboardingSlide === 2 && (
-            <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-              {/* Slide 2 content kept as is */}
-            </div>
-          )}
-        </div>
-
-        {/* Bottom Controls */}
-        <div className="relative z-10 w-full max-w-md mx-auto space-y-4 pb-2">
-          <div className="flex items-center justify-center gap-2">
-            {[0, 1, 2].map((idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => setOnboardingSlide(idx)}
-                className={`h-1.5 rounded-full transition-all duration-300 ${onboardingSlide === idx ? 'w-8 bg-indigo-500 shadow-md shadow-indigo-500/50' : 'w-2 bg-white/20 hover:bg-white/40'}`}
-                aria-label={`Go to slide ${idx + 1}`}
-              />
-            ))}
-          </div>
-          {onboardingSlide < 2 ? (
-            <button
-              type="button"
-              onClick={() => setOnboardingSlide((prev) => prev + 1)}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-semibold shadow-xl shadow-indigo-500/25 transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>Continue</span>
-              <span className="text-base">➔</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={dismissOnboarding}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-500 via-indigo-600 to-violet-600 hover:brightness-110 text-white text-sm font-bold shadow-xl shadow-indigo-500/30 transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>Get Started</span>
-              <span className="text-base">🚀</span>
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-  return (
+        return (
           <div
             className="fixed inset-0 z-50 bg-black/80 backdrop-blur-2xl flex items-center justify-center p-4 animate-in fade-in duration-150"
             onClick={() => setSelectedEntry(null)}
@@ -2590,7 +1823,7 @@ export default function App() {
         );
       })()}
 
-      {/* Full-Screen Professional Swiggy/Rapido/Flipkart-Style Onboarding Experience */}
+      
       {showOnboarding && (
         <div
           onTouchStart={handleTouchStart}
