@@ -1,6 +1,6 @@
 # VoicePad 🎙️📷
 
-> **VoicePad is a multimodal retrieval engine that lets you search and retrieve visual and textual information using natural voice commands**.
+> **VoicePAD is a multimodal retrieval engine that lets you search and retrieve visual and textual information using natural voice commands**.
 
 ---
 
