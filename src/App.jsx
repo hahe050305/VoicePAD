@@ -20,6 +20,68 @@ import {
 } from "./services/moonshineService.js";
 import { createId } from "./id.js";
 
+// Map detected containers and scenes to high-probability occluded objects
+const CONTAINER_AFFORDANCES = {
+  "#bag": [
+    { label: "Keys in bag", tag: "#keys", icon: "🔑" },
+    { label: "Wallet in bag", tag: "#wallet", icon: "👛" },
+    { label: "Charger in bag", tag: "#charger", icon: "🔌" },
+    { label: "Passport", tag: "#passport", icon: "🛂" },
+    { label: "Earphones", tag: "#headphones", icon: "🎧" },
+  ],
+  "#vehicle": [
+    { label: "Parking spot", tag: "#parking", icon: "🅿️" },
+    { label: "Car keys", tag: "#keys", icon: "🔑" },
+    { label: "In glovebox", tag: "#glovebox", icon: "🗄️" },
+    { label: "In trunk", tag: "#trunk", icon: "📦" },
+    { label: "Parking ticket", tag: "#receipt", icon: "🧾" },
+  ],
+  "#clothing": [
+    { label: "Keys in pocket", tag: "#keys", icon: "🔑" },
+    { label: "Wallet in pocket", tag: "#wallet", icon: "👛" },
+    { label: "Card / ID", tag: "#idcard", icon: "🪪" },
+    { label: "Inside jacket", tag: "#jacket", icon: "🧥" },
+  ],
+  "#tech": [
+    { label: "Cables / Hub", tag: "#cables", icon: "🔌" },
+    { label: "Work notes", tag: "#notes", icon: "📝" },
+    { label: "USB drive", tag: "#drive", icon: "💾" },
+    { label: "Glasses", tag: "#glasses", icon: "👓" },
+  ],
+  "#document": [
+    { label: "Receipt / Bill", tag: "#receipt", icon: "🧾" },
+    { label: "ID / License", tag: "#idcard", icon: "🪪" },
+    { label: "Warranty doc", tag: "#document", icon: "📄" },
+    { label: "Medical report", tag: "#health", icon: "🩺" },
+  ],
+  "#food": [
+    { label: "Pills / Meds", tag: "#medicine", icon: "💊" },
+    { label: "Groceries", tag: "#groceries", icon: "🛒" },
+    { label: "Snack / Treat", tag: "#snack", icon: "🍫" },
+  ],
+  "#bottle": [
+    { label: "Pills / Meds", tag: "#medicine", icon: "💊" },
+    { label: "Water bottle", tag: "#bottle", icon: "🥤" },
+  ],
+};
+
+const DEFAULT_OCCLUDED_CHIPS = [
+  { label: "Keys", tag: "#keys", icon: "🔑" },
+  { label: "Wallet", tag: "#wallet", icon: "👛" },
+  { label: "Pills / Meds", tag: "#medicine", icon: "💊" },
+  { label: "Glasses", tag: "#glasses", icon: "👓" },
+  { label: "Charger", tag: "#charger", icon: "🔌" },
+  { label: "Important doc", tag: "#document", icon: "📄" },
+];
+
+export function getPredictiveChips(entry) {
+  const tags = entry?.tags || [];
+  for (const [containerTag, chips] of Object.entries(CONTAINER_AFFORDANCES)) {
+    if (tags.includes(containerTag)) return chips;
+  }
+  return DEFAULT_OCCLUDED_CHIPS;
+}
+
 export default function App() {
   const [query, setQuery] = useState("");
   const [voiceTranscript, setVoiceTranscript] = useState("");
@@ -53,6 +115,9 @@ export default function App() {
   const cardRecognizerRef = useRef(null);
   const [quickLabelingId, setQuickLabelingId] = useState(null);
   const [quickLabelInput, setQuickLabelInput] = useState("");
+
+  // Ephemeral Quick Anchor Toast (triggered right upon photo snap)
+  const [quickAnchorToast, setQuickAnchorToast] = useState(null);
 
   // Zoom modal state — entry selected by clicking a card
   const [selectedEntry, setSelectedEntry] = useState(null);
@@ -736,14 +801,21 @@ export default function App() {
     }
   }, [recordingCardId, stopCardVoiceLabel, selectedEntry?.id]);
 
-  const handleSaveQuickLabel = useCallback(async (entry, labelText, e) => {
+  const handle1TapAnchor = useCallback(async (entry, chipOrText, e) => {
     if (e) e.stopPropagation();
+    const labelText = typeof chipOrText === "string" ? chipOrText : chipOrText?.label;
+    const chipTag = typeof chipOrText === "object" && chipOrText?.tag ? chipOrText.tag : null;
     const cleanLabel = (labelText || quickLabelInput).trim();
     if (!cleanLabel) return;
 
     const normalized = cleanLabel.toLowerCase().replace(/[^a-z0-9]/g, "_");
     const derived = deriveTags(cleanLabel);
-    const labelTags = [`#label_${normalized}`, `#${normalized}`, ...derived];
+    const labelTags = [
+      ...(chipTag ? [chipTag] : []),
+      `#label_${normalized}`,
+      `#${normalized}`,
+      ...derived,
+    ];
     const existingTags = entry.tags || [];
     const combinedTags = Array.from(new Set([...existingTags, ...labelTags, "#photo"]));
 
@@ -769,9 +841,23 @@ export default function App() {
       );
     }
 
+    setQuickAnchorToast((prev) => {
+      if (prev?.entryId === entry.id) {
+        if (prev.timerId) clearTimeout(prev.timerId);
+        return {
+          ...prev,
+          savedLabel: cleanLabel,
+          timerId: setTimeout(() => setQuickAnchorToast(null), 1200),
+        };
+      }
+      return prev;
+    });
+
     setQuickLabelingId(null);
     setQuickLabelInput("");
   }, [quickLabelInput, selectedEntry?.id]);
+
+  const handleSaveQuickLabel = handle1TapAnchor;
 
   // ── Image Capture / Vision & OCR Pipeline ────────────────────────────────────
   const extractTagsFromText = (text) => {
@@ -811,6 +897,20 @@ export default function App() {
       const sorted = [...updated].sort((a, b) => b.timestamp - a.timestamp);
       setAllEntries(sorted);
       setFilteredEntries(sorted.slice(0, 20));
+
+      // Trigger 1-Tap Quick-Anchor Toast for the newly captured photo
+      if (newEntries.length > 0) {
+        const first = newEntries[0];
+        setQuickAnchorToast((prev) => {
+          if (prev?.timerId) clearTimeout(prev.timerId);
+          return {
+            entryId: first.id,
+            timerId: setTimeout(() => {
+              setQuickAnchorToast((curr) => (curr?.entryId === first.id ? null : curr));
+            }, 8000),
+          };
+        });
+      }
 
       // Run OCR & CLIP Vector Embedding silently in background
       const processingTask = (async () => {
@@ -1448,13 +1548,30 @@ export default function App() {
                             </button>
                           )}
                           {entry.label ? (
-                            <span className="text-[10px] font-medium px-2.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 flex items-center gap-1">
-                              🏷️ {entry.label}
+                            <span className="text-[10px] font-medium px-2.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 flex items-center gap-1.5">
+                              <span>🏷️ {entry.label}</span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setQuickLabelingId(entry.id);
+                                  setQuickLabelInput(entry.label);
+                                }}
+                                className="text-[9px] px-1 py-0.2 rounded bg-white/[0.08] hover:bg-white/[0.15] text-slate-300 hover:text-white transition"
+                                title="Edit label"
+                              >
+                                Edit
+                              </button>
                             </span>
                           ) : entry.type === "image" ? (
                             <div className="flex items-center gap-1.5">
                               <button
-                                onClick={(e) => startEditing(entry, e)}
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setQuickLabelingId(entry.id);
+                                  setQuickLabelInput("");
+                                }}
                                 className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 transition"
                               >
                                 + Label
@@ -1562,18 +1679,28 @@ export default function App() {
                               ))}
                             </div>
 
-                            {/* Human-friendly ambient prompt when image is unclassified */}
-                            {isClipFailed && (
+                            {/* Contextual 1-Tap Predictive Ribbon & Manual Option (for unlabeled images) */}
+                            {entry.type === "image" && !entry.label && (
                               <div
                                 onClick={(e) => e.stopPropagation()}
-                                className="p-3 rounded-2xl bg-white/[0.02] border border-indigo-500/20 text-slate-200 flex flex-col gap-2 mt-2"
+                                className="p-2.5 rounded-2xl bg-white/[0.02] border border-indigo-500/20 flex flex-col gap-2 mt-2 transition"
                               >
-                                <p className="text-[11px] text-slate-300 leading-relaxed">
-                                  Need help finding this later? Add a 2-second voice note or label.
-                                </p>
-
                                 {quickLabelingId === entry.id ? (
-                                  <div className="space-y-2 mt-1">
+                                  <div className="space-y-2">
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-[11px] text-slate-300 font-medium">Add Manual Label:</span>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setQuickLabelingId(null);
+                                          setQuickLabelInput("");
+                                        }}
+                                        className="text-[10px] text-slate-400 hover:text-white"
+                                      >
+                                        ✕ Cancel
+                                      </button>
+                                    </div>
                                     <div className="flex gap-1.5">
                                       <input
                                         type="text"
@@ -1582,73 +1709,78 @@ export default function App() {
                                         onKeyDown={(e) => {
                                           if (e.key === "Enter") {
                                             e.preventDefault();
-                                            handleSaveQuickLabel(entry, quickLabelInput, e);
+                                            handle1TapAnchor(entry, quickLabelInput, e);
                                           }
                                         }}
-                                        placeholder="e.g. Keys inside bag zip..."
+                                        placeholder="e.g. Spare keys, passport, prescription..."
                                         className="flex-1 px-3 py-1.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                                         autoFocus
                                       />
                                       <button
                                         type="button"
-                                        onClick={(e) => handleSaveQuickLabel(entry, quickLabelInput, e)}
-                                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl text-xs transition"
+                                        onClick={(e) => handle1TapAnchor(entry, quickLabelInput, e)}
+                                        className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl text-xs transition active:scale-95 shadow"
                                       >
                                         Save
                                       </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div>
+                                    <div className="flex items-center justify-between mb-1.5">
+                                      <p className="text-[11px] text-slate-300 font-medium flex items-center gap-1">
+                                        <span>✨</span> What's inside or hidden?
+                                      </p>
+                                      <div className="flex items-center gap-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={(e) => handleStartVoiceLabel(entry, e)}
+                                          className={`text-[10px] font-medium px-2 py-0.5 rounded-full border transition flex items-center gap-1 ${
+                                            recordingCardId === entry.id
+                                              ? "bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse"
+                                              : "bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 border-white/[0.08]"
+                                          }`}
+                                        >
+                                          🎤 {recordingCardId === entry.id ? "Listening..." : "Voice"}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setQuickLabelingId(entry.id);
+                                            setQuickLabelInput("");
+                                          }}
+                                          className="text-[10px] text-indigo-400 hover:text-indigo-300 font-medium"
+                                        >
+                                          + Manual
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      {getPredictiveChips(entry).map((chip) => (
+                                        <button
+                                          key={chip.label}
+                                          type="button"
+                                          onClick={(e) => handle1TapAnchor(entry, chip, e)}
+                                          className="text-[11px] px-2.5 py-1 rounded-full bg-white/[0.04] hover:bg-indigo-500/20 text-slate-200 hover:text-indigo-200 border border-white/[0.08] hover:border-indigo-500/30 transition active:scale-95 flex items-center gap-1 font-medium shadow-sm"
+                                        >
+                                          <span>{chip.icon}</span>
+                                          <span>{chip.label}</span>
+                                        </button>
+                                      ))}
                                       <button
                                         type="button"
                                         onClick={(e) => {
                                           e.stopPropagation();
-                                          setQuickLabelingId(null);
+                                          setQuickLabelingId(entry.id);
+                                          setQuickLabelInput("");
                                         }}
-                                        className="px-2.5 py-1.5 bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 rounded-xl text-xs transition"
+                                        className="text-[10px] px-2 py-1 rounded-full bg-white/[0.02] hover:bg-white/[0.06] text-slate-400 hover:text-white border border-dashed border-white/[0.1] transition font-medium"
                                       >
-                                        Cancel
+                                        ✏️ Other...
                                       </button>
                                     </div>
-
-                                    <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-                                      {["Keys in bag", "Car keys", "House keys", "Backpack", "Wallet", "Receipt"].map((chip) => (
-                                        <button
-                                          key={chip}
-                                          type="button"
-                                          onClick={(e) => handleSaveQuickLabel(entry, chip, e)}
-                                          className="text-[10px] px-2.5 py-0.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-indigo-300 border border-white/[0.06] transition"
-                                        >
-                                          + {chip}
-                                        </button>
-                                      ))}
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                                    <button
-                                      type="button"
-                                      onClick={(e) => handleStartVoiceLabel(entry, e)}
-                                      className={`px-3 py-1.5 rounded-xl text-xs font-medium flex items-center gap-1.5 transition ${
-                                        recordingCardId === entry.id
-                                          ? "bg-rose-500 text-white animate-pulse"
-                                          : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm"
-                                      }`}
-                                    >
-                                      <span>{recordingCardId === entry.id ? "⏹️ Stop" : "🎤 2-Sec Voice Note"}</span>
-                                      {recordingCardId === entry.id && (
-                                        <span className="text-[10px] text-white/90">Listening...</span>
-                                      )}
-                                    </button>
-
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setQuickLabelingId(entry.id);
-                                        setQuickLabelInput("");
-                                      }}
-                                      className="px-3 py-1.5 bg-white/[0.05] hover:bg-white/[0.08] text-slate-200 border border-white/[0.08] rounded-xl text-xs font-medium transition flex items-center gap-1"
-                                    >
-                                      <span>🏷️ Add Label</span>
-                                    </button>
                                   </div>
                                 )}
                               </div>
@@ -1707,6 +1839,113 @@ export default function App() {
         </section>
       </main>
 
+      {/* Quick-Anchor Ephemeral Toast (Triggered right upon photo snap) */}
+      {quickAnchorToast && (() => {
+        const targetEntry =
+          allEntries.find((e) => e.id === quickAnchorToast.entryId) ||
+          filteredEntries.find((e) => e.id === quickAnchorToast.entryId);
+        if (!targetEntry) return null;
+
+        const chips = getPredictiveChips(targetEntry);
+        const isManualInputOpen = quickLabelingId === targetEntry.id;
+
+        return (
+          <aside
+            aria-label="Quick label memory"
+            className="fixed bottom-5 z-50 w-full max-w-md px-4 pointer-events-auto animate-in slide-in-from-bottom-5 fade-in duration-200"
+          >
+            <div className="p-3 bg-[#0d121d]/95 border border-indigo-500/30 rounded-2xl shadow-2xl shadow-indigo-950/60 backdrop-blur-xl flex flex-col gap-2">
+              {quickAnchorToast.savedLabel ? (
+                <div className="flex items-center justify-between text-xs text-emerald-300 font-medium py-1 px-1">
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                    ✓ Anchored as "{quickAnchorToast.savedLabel}"
+                  </span>
+                  <span className="text-[10px] text-slate-400">Saved</span>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-slate-200 flex items-center gap-1.5">
+                      <span>✨</span>
+                      <span>Did you store something here?</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setQuickAnchorToast(null)}
+                      className="text-slate-400 hover:text-white text-xs px-1 hover:bg-white/[0.08] rounded-full transition"
+                      aria-label="Dismiss quick anchor"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  {isManualInputOpen ? (
+                    <div className="flex gap-1.5 mt-1">
+                      <input
+                        type="text"
+                        value={quickLabelInput}
+                        onChange={(e) => setQuickLabelInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            handle1TapAnchor(targetEntry, quickLabelInput, e);
+                          }
+                        }}
+                        placeholder="e.g. Spare keys, passport, prescription..."
+                        className="flex-1 px-3 py-1.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        autoFocus
+                      />
+                      <button
+                        type="button"
+                        onClick={(e) => handle1TapAnchor(targetEntry, quickLabelInput, e)}
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl text-xs transition active:scale-95 shadow"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuickLabelingId(null);
+                          setQuickLabelInput("");
+                        }}
+                        className="px-2.5 py-1.5 bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 rounded-xl text-xs transition"
+                      >
+                        Back
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                      {chips.map((chip) => (
+                        <button
+                          key={chip.label}
+                          type="button"
+                          onClick={(e) => handle1TapAnchor(targetEntry, chip, e)}
+                          className="text-[11px] px-2.5 py-1 rounded-full bg-white/[0.05] hover:bg-indigo-500/20 text-slate-200 hover:text-indigo-200 border border-white/[0.08] hover:border-indigo-500/30 transition active:scale-95 flex items-center gap-1 font-medium shadow-sm"
+                        >
+                          <span>{chip.icon}</span>
+                          <span>{chip.label}</span>
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuickLabelingId(targetEntry.id);
+                          setQuickLabelInput("");
+                        }}
+                        className="text-[11px] px-2.5 py-1 rounded-full bg-white/[0.03] hover:bg-white/[0.08] text-slate-300 hover:text-white border border-dashed border-white/[0.15] transition font-medium"
+                      >
+                        ✏️ Other...
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </aside>
+        );
+      })()}
+
       {/* Centered zoomed memory modal */}
       {selectedEntry && (() => {
         const modalEntry = selectedEntry;
@@ -1738,27 +1977,39 @@ export default function App() {
                     </button>
                   )}
                   {modalEntry.label ? (
-                    <span className="text-[10px] font-medium px-2.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 flex items-center gap-1">
-                      🏷️ {modalEntry.label}
-                    </span>
-                  ) : modalEntry.type === "image" ? (
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => { startEditing(modalEntry); setSelectedEntry(null); }}
-                        className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 transition"
-                      >
-                        + Add Label
-                      </button>
+                    <span className="text-[10px] font-medium px-2.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 flex items-center gap-1.5">
+                      <span>🏷️ {modalEntry.label}</span>
                       <button
                         type="button"
-                        onClick={(e) => handleStartVoiceLabel(modalEntry, e)}
-                        className={`text-[10px] font-medium px-2 py-0.5 rounded-full border transition flex items-center gap-1 ${
-                          recordingCardId === modalEntry.id
-                            ? "bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse"
-                            : "bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 border-white/[0.08]"
-                        }`}
+                        onClick={() => {
+                          startEditing(modalEntry);
+                          setSelectedEntry(null);
+                        }}
+                        className="text-[9px] px-1 py-0.5 rounded bg-white/[0.08] hover:bg-white/[0.15] text-slate-200 transition"
                       >
-                        🎤 {recordingCardId === modalEntry.id ? "Listening..." : "Voice Note"}
+                        Edit
+                      </button>
+                    </span>
+                  ) : modalEntry.type === "image" ? (
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {getPredictiveChips(modalEntry).slice(0, 3).map((chip) => (
+                        <button
+                          key={chip.label}
+                          type="button"
+                          onClick={(e) => handle1TapAnchor(modalEntry, chip, e)}
+                          className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/[0.05] hover:bg-indigo-500/20 text-slate-300 hover:text-indigo-200 border border-white/[0.08] transition"
+                        >
+                          {chip.icon} {chip.label}
+                        </button>
+                      ))}
+                      <button
+                        onClick={() => {
+                          startEditing(modalEntry);
+                          setSelectedEntry(null);
+                        }}
+                        className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 transition"
+                      >
+                        + Manual Label
                       </button>
                     </div>
                   ) : null}
