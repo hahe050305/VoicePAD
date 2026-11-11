@@ -19,7 +19,7 @@ const NON_VEHICLE_KEYWORDS = [
   "HOMESTAY", "LOVE", "PEACE", "HAPPY", "BIRTHDAY", "FESTIVAL", "CELEBRATION"
 ];
 
-const BH_PLATE_PATTERN = /\b\d{2}\s*BH\s*\d{4}\s*[A-Z]{1,2}\b/;
+const BH_PLATE_PATTERN = /(?:^|[^A-Z0-9]|IND\s*)(\d{2}\s*BH\s*\d{4}\s*[A-Z]{1,2})\b/;
 const STATE_OCR_ALTERNATIVES = {
   "0": ["O"],
   "1": ["I", "L"],
@@ -234,7 +234,7 @@ export function parsePlateString(raw) {
   }
 
   const bhMatch = rawStr.match(BH_PLATE_PATTERN);
-  if (bhMatch) return formatPlate(bhMatch[0]);
+  if (bhMatch) return formatPlate(bhMatch[1] || bhMatch[0]);
 
   return findStandardPlate(rawStr);
 }
