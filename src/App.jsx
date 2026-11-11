@@ -82,6 +82,33 @@ export function getPredictiveChips(entry) {
   return DEFAULT_OCCLUDED_CHIPS;
 }
 
+// Determines if an image detection / OCR extraction had LOW confidence
+// (e.g., occluded objects, missing tags, or container scenes like a bag/coat where contents are hidden)
+export function isLowConfidenceDetection(entry) {
+  if (!entry || entry.type !== "image" || entry.label) return false;
+
+  // 1. Confident OCR extraction (e.g. vehicle license plate, store receipt, document) -> NOT low confidence
+  const hasConfidentOcr = Boolean(
+    entry.ocr &&
+    entry.ocr.trim().length > 3 &&
+    !isPureImageText(entry.ocr)
+  );
+  if (hasConfidentOcr) return false;
+
+  const tags = entry.tags || [];
+
+  // 2. Confident standalone object detection (e.g. #dog, #cat, #laptop, #shoes, #bicycle, #bottle, #cup, etc.)
+  // When these concrete standalone items are recognized, vision model was confident!
+  const hasSpecificStandaloneTag = tags.some(
+    (t) => !["#photo", "#image", "#picture", "#bag", "#backpack", "#clothing"].includes(t)
+  );
+  if (hasSpecificStandaloneTag) return false;
+
+  // 3. Low confidence: No specific objects identified (clipFailed / generic #photo),
+  // OR only container scenes were recognized (#bag, #clothing) where the inner object is occluded.
+  return true;
+}
+
 export default function App() {
   const [query, setQuery] = useState("");
   const [voiceTranscript, setVoiceTranscript] = useState("");
@@ -898,20 +925,6 @@ export default function App() {
       setAllEntries(sorted);
       setFilteredEntries(sorted.slice(0, 20));
 
-      // Trigger 1-Tap Quick-Anchor Toast for the newly captured photo
-      if (newEntries.length > 0) {
-        const first = newEntries[0];
-        setQuickAnchorToast((prev) => {
-          if (prev?.timerId) clearTimeout(prev.timerId);
-          return {
-            entryId: first.id,
-            timerId: setTimeout(() => {
-              setQuickAnchorToast((curr) => (curr?.entryId === first.id ? null : curr));
-            }, 8000),
-          };
-        });
-      }
-
       // Run OCR & CLIP Vector Embedding silently in background
       const processingTask = (async () => {
         for (let i = 0; i < newEntries.length; i++) {
@@ -1019,19 +1032,36 @@ export default function App() {
 
             await Promise.all([ocrPromise, embedPromise]);
 
-            // Secondary fallback check: did CLIP fail to classify this image?
+            // Low-confidence check: Did CLIP / OCR fail to classify or find a specific object?
             // (e.g. keys inside bag, small/occluded items where CLIP produced no specific tags)
             const updatedRecord = await db.images.get(entry.id);
-            const currentTags = updatedRecord?.tags || [];
-            const hasSpecificTags = currentTags.some((t) => t !== "#photo" && t !== "#image" && t !== "#picture");
-            const hasPlateOrText = Boolean(updatedRecord?.ocr?.trim() && !isPureImageText(updatedRecord?.ocr));
-            const clipFailed = !updatedRecord?.label && !hasSpecificTags && !hasPlateOrText;
+            const isLowConfidence = isLowConfidenceDetection(updatedRecord);
 
-            if (clipFailed) {
+            if (isLowConfidence) {
               await db.images.update(entry.id, { clipFailed: true });
               const markFailed = (item) => item.id === entry.id ? { ...item, clipFailed: true } : item;
               setFilteredEntries((curr) => curr.map(markFailed));
               setAllEntries((curr) => curr.map(markFailed));
+
+              // ONLY fire the ephemeral quick-anchor toast for low-confidence / occluded images!
+              if (i === 0) {
+                setQuickAnchorToast((prev) => {
+                  if (prev?.timerId) clearTimeout(prev.timerId);
+                  return {
+                    entryId: entry.id,
+                    timerId: setTimeout(() => {
+                      setQuickAnchorToast((curr) => (curr?.entryId === entry.id ? null : curr));
+                    }, 8000),
+                  };
+                });
+              }
+            } else {
+              await db.images.update(entry.id, { clipFailed: false });
+              const markSuccess = (item) => item.id === entry.id ? { ...item, clipFailed: false } : item;
+              setFilteredEntries((curr) => curr.map(markSuccess));
+              setAllEntries((curr) => curr.map(markSuccess));
+              // High confidence! If any toast was queued for this image, dismiss it
+              setQuickAnchorToast((prev) => (prev?.entryId === entry.id ? null : prev));
             }
 
           } catch (err) {
@@ -1679,8 +1709,8 @@ export default function App() {
                               ))}
                             </div>
 
-                            {/* Contextual 1-Tap Predictive Ribbon & Manual Option (for unlabeled images) */}
-                            {entry.type === "image" && !entry.label && (
+                            {/* Contextual 1-Tap Predictive Ribbon & Manual Option (ONLY for low confidence / occluded images) */}
+                            {isLowConfidenceDetection(entry) && (
                               <div
                                 onClick={(e) => e.stopPropagation()}
                                 className="p-2.5 rounded-2xl bg-white/[0.02] border border-indigo-500/20 flex flex-col gap-2 mt-2 transition"
@@ -1992,16 +2022,17 @@ export default function App() {
                     </span>
                   ) : modalEntry.type === "image" ? (
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      {getPredictiveChips(modalEntry).slice(0, 3).map((chip) => (
-                        <button
-                          key={chip.label}
-                          type="button"
-                          onClick={(e) => handle1TapAnchor(modalEntry, chip, e)}
-                          className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/[0.05] hover:bg-indigo-500/20 text-slate-300 hover:text-indigo-200 border border-white/[0.08] transition"
-                        >
-                          {chip.icon} {chip.label}
-                        </button>
-                      ))}
+                      {isLowConfidenceDetection(modalEntry) &&
+                        getPredictiveChips(modalEntry).slice(0, 3).map((chip) => (
+                          <button
+                            key={chip.label}
+                            type="button"
+                            onClick={(e) => handle1TapAnchor(modalEntry, chip, e)}
+                            className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/[0.05] hover:bg-indigo-500/20 text-slate-300 hover:text-indigo-200 border border-white/[0.08] transition"
+                          >
+                            {chip.icon} {chip.label}
+                          </button>
+                        ))}
                       <button
                         onClick={() => {
                           startEditing(modalEntry);

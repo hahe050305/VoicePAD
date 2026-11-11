@@ -1,6 +1,10 @@
 # VoicePad 🎙️📷
 
-> **A zero-cloud multimodal retrieval platform that enables natural-language search across visual and audio data, executing computer vision, speech transcription, and vector search entirely in-client.**
+> **VoicePAD is a multimodal retrieval engine that lets you search and retrieve visual and textual information using natural voice commands**.
+
+---
+
+By combining speech transcription, computer vision, and vector search entirely on-device, VoicePad delivers instant, seamless recall while ensuring complete privacy and eliminating the need for cloud services.
 
 ---
 
@@ -15,7 +19,8 @@ With people waiting in line behind you, scrolling through thousands of unorganiz
 Speaking is effortless and immediate. Instead of navigating albums or fighting autocorrect, you just tap the mic and say:
 
 > *"Bike plate"* or *"Doctor prescription"*
-
+multimodal retrieval engine" that searches across visual, audio, and textual information stored & retrive them through natural language.
+By running speech t
 VoicePad's voice engine processes the spoken phrase as you talk and surfaces the exact image is fetched : completely offline, without waiting on cloud connectivity or cellular reception.
 
 ---
