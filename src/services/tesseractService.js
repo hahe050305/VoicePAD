@@ -6,6 +6,7 @@ let workerPromise = null;
 let idleTimer = null;
 let activeProgress = null;
 let queue = Promise.resolve();
+let ocrWarmupPromise = null;
 const idleTimeout = 180000; // Keep worker warm for 3 minutes during user session
 
 function resetIdleTimer(worker) {
@@ -39,13 +40,18 @@ export async function getTesseractWorker() {
 }
 
 /** Pre-warm Tesseract worker without blocking or allocating excessive memory */
-export function prewarmOCR(delay = 3200) {
-  if (typeof window === "undefined") return;
-  setTimeout(() => {
-    getTesseractWorker().catch((err) => {
-      console.warn("[OCR] Pre-warming skipped:", err);
-    });
-  }, delay);
+export function prewarmOCR(delay = 0) {
+  if (typeof window === "undefined") return Promise.resolve(null);
+  if (!ocrWarmupPromise) {
+    ocrWarmupPromise = new Promise((resolve) => setTimeout(resolve, delay))
+      .then(() => getTesseractWorker())
+      .catch((error) => {
+        ocrWarmupPromise = null;
+        console.warn("[OCR] Pre-warming skipped:", error);
+        return null;
+      });
+  }
+  return ocrWarmupPromise;
 }
 
 /** Serialize requests because Tesseract's whitelist and page mode are worker-wide settings. */
@@ -152,7 +158,7 @@ export async function recognizeWithTesseractEnhancements(image, options = {}) {
   let variants;
   try {
     variants = await prepareFastVariants(image);
-  } catch (err) {
+  } catch {
     variants = { baseline: image, contrast: image, crop: image };
   }
 

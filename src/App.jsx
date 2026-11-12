@@ -260,10 +260,21 @@ const loadEntries = useCallback(async () => { await seedDemoData();
       .catch((err) => console.error("Failed to load memories:", err));
     const unsubscribeVisionStatus = subscribeVisionModelStatus(setVisionModelStatus);
 
-// Progressive background warm-up: prewarms Vision AI, Moonshine STT, and OCR in background workers without freezing the UI
-prewarmVisionModel();
-prewarmMoonshine();
-prewarmOCR();
+// Warm one model at a time during idle periods. Concurrent model downloads and
+// inference can contend for memory/CPU on phones even though work is in workers.
+const waitForIdle = () => new Promise((resolve) => {
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(resolve, { timeout: 2500 });
+  } else {
+    window.setTimeout(resolve, 700);
+  }
+});
+void (async () => {
+  await waitForIdle();
+  await prewarmVisionModel();
+  await waitForIdle();
+  await prewarmOCR();
+})();
 
     const unsubscribeMoonshine = subscribeMoonshineStatus(setMoonshineStatus);
 
@@ -489,6 +500,7 @@ try {
       setVoiceTranscript("");
       try {
 // Start hardware-level noise reduction and 16kHz audio buffer capture
+void prewarmMoonshine();
 await startAudioCapture();
         if (!listeningRef.current) {
           cancelAudioCapture();

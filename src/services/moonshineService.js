@@ -66,18 +66,24 @@ function getWorker() {
   return worker;
 }
 
-export function prewarmMoonshine(delay = 1800) {
-  if (typeof window === "undefined") return;
-  // Ensure model assets are cached locally before warm‑up
-  ensureMoonshineModelCached()
-    .catch((e) => console.warn("[Moonshine] Cache priming failed:", e))
-    .finally(() => {
-      setTimeout(() => {
-        runTask("warmup").catch((err) => {
-          console.warn("[Moonshine] Background model pre‑warming skipped:", err);
-        });
-      }, delay);
-    });
+let moonshineWarmupPromise = null;
+
+export function prewarmMoonshine(delay = 0) {
+  if (typeof window === "undefined") return Promise.resolve(null);
+  if (!moonshineWarmupPromise) {
+    moonshineWarmupPromise = ensureMoonshineModelCached()
+      .catch((error) => {
+        console.warn("[Moonshine] Cache priming failed:", error);
+      })
+      .then(() => new Promise((resolve) => setTimeout(resolve, delay)))
+      .then(() => runTask("warmup"))
+      .catch((error) => {
+        moonshineWarmupPromise = null;
+        console.warn("[Moonshine] Background model pre-warming skipped:", error);
+        return null;
+      });
+  }
+  return moonshineWarmupPromise;
 }
 
 function runTask(type, payload) {
