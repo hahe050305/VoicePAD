@@ -31,6 +31,7 @@
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
+    "@capacitor/assets": "^4.0.0",
     "@capacitor/cli": "^8.6.0",
     "@eslint/js": "^10.0.1",
     "@tailwindcss/postcss": "^4.3.3",
