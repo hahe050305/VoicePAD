@@ -1086,10 +1086,8 @@ if (showOnboarding) { return ( <div onTouchStart={handleTouchStart} onTouchEnd={
 {/* Top Bar: Brand + Skip */}
 <div className="relative z-10 w-full max-w-md mx-auto flex items-center justify-between pt-2">
   <div className="flex items-center gap-2">
-    <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/25">
-      <span className="text-white text-sm">✦</span>
-    </div>
-    <span className="text-sm font-semibold tracking-tight text-white/95">VoicePad</span>
+    <img src="/voicepad-icon.png" alt="" className="w-10 h-10 object-contain rounded-xl shrink-0" />
+    <span className="text-sm font-semibold tracking-tight text-white/95">VoicePAD</span>
   </div>
   <button
     type="button"
@@ -1121,7 +1119,7 @@ if (showOnboarding) { return ( <div onTouchStart={handleTouchStart} onTouchEnd={
         <span className="bg-gradient-to-r from-indigo-400 to-violet-300 bg-clip-text text-transparent">Find in Milliseconds</span>
       </h2>
       <p className="text-xs text-slate-400 max-w-xs leading-relaxed mb-6">
-        In a rush or panic moment? Just tap the orb and speak. VoicePad pinpoints vehicle plates, keys, and important notes in milliseconds.
+        In a rush or panic moment? Just tap the orb and speak. VoicePAD pinpoints vehicle plates, keys, and important notes in milliseconds.
       </p>
       <div className="flex items-center gap-2 flex-wrap justify-center">
         <span className="text-[10px] font-medium px-2.5 py-1 rounded-full bg-white/[0.04] text-slate-300 border border-white/[0.08]">⚡ Zero Search Delay</span>
@@ -1212,12 +1210,10 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
 {/* Clean Mobile App Header */}
 <header className="w-full max-w-md flex items-center justify-between pb-4 mb-2 z-10">
   <div className="flex items-center gap-2.5">
-    <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-      <span className="text-white text-sm">✦</span>
-    </div>
+    <img src="/voicepad-icon.png" alt="" className="w-10 h-10 object-contain rounded-xl shrink-0" />
     <div>
       <h1 className="text-base font-semibold tracking-tight text-white/95">
-        VoicePad
+        VoicePAD
       </h1>
       <p className="text-[11px] text-slate-400 font-normal">
         Instant memory capture
@@ -2119,9 +2115,7 @@ return (
 {/* Top Bar: Brand + Skip */}
 <div className="relative z-10 w-full max-w-md mx-auto flex items-center justify-between pt-2">
   <div className="flex items-center gap-2">
-    <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/25">
-      <span className="text-white text-sm">✦</span>
-    </div>
+    <img src="/voicepad-icon.png" alt="" className="w-10 h-10 object-contain rounded-xl shrink-0" />
     <span className="text-sm font-semibold tracking-tight text-white/95">
       VoicePAD
     </span>
@@ -2160,7 +2154,7 @@ return (
   </span>
 </h2>
 <p className="text-xs text-slate-400 max-w-xs leading-relaxed mb-6">
-  In a rush or panic moment? Just tap the orb and speak. VoicePad pinpoints the info you are looking for.
+  In a rush or panic moment? Just tap the orb and speak. VoicePAD pinpoints the info you are looking for.
 </p>
 
     <div className="flex items-center gap-2 flex-wrap justify-center">
