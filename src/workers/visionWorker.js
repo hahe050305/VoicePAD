@@ -107,6 +107,7 @@ const VISUAL_CATEGORIES = [
   { prompt: "a photo of a car or automobile", tags: ["#car", "#vehicle"] },
   { prompt: "a photo of a vehicle license plate", tags: ["#vehicle", "#licenseplate"] },
   { prompt: "a photo of a bicycle", tags: ["#bicycle"] },
+  { prompt: "a photo of a parking spot, garage, or vehicle parking lot", tags: ["#parking", "#vehicle"] },
 
   // Personal items & apparel
   { prompt: "a photo of shoes or sneakers", tags: ["#shoes"] },
@@ -116,6 +117,11 @@ const VISUAL_CATEGORIES = [
   { prompt: "a photo of a wallet or purse", tags: ["#wallet"] },
   { prompt: "a photo of clothes, shirt, jacket, or apparel", tags: ["#clothing"] },
   { prompt: "a photo of a book, textbook, novel, or thick bound notebook", tags: ["#book", "#notes"] },
+  { prompt: "a photo of an ID card, driver's license, credit card, or passport", tags: ["#idcard", "#document"] },
+  { prompt: "a photo of medicine, pills, tablets, or prescription bottle", tags: ["#medicine", "#health"] },
+  { prompt: "a photo of a cardboard delivery box, parcel, or shipping package", tags: ["#package", "#delivery"] },
+  { prompt: "a photo of a phone charger, power adapter, or charging cable", tags: ["#charger", "#tech"] },
+  { prompt: "a photo of a chair, desk, table, sofa, or indoor furniture", tags: ["#furniture"] },
 
   // Paper, Documents & Signatures
   { prompt: "a photo of a handwritten signature, sign, or autograph on a piece of paper", tags: ["#signature", "#document"] },
@@ -168,7 +174,7 @@ async function getCandidateEmbeddings(tokenizer, textModel) {
   return candidatePromptEmbeddings;
 }
 
-function extractVisualTags(imageEmbedding, candidateEmbeddings, threshold = 0.235) {
+function extractVisualTags(imageEmbedding, candidateEmbeddings, threshold = 0.19) {
   if (!imageEmbedding || !candidateEmbeddings || candidateEmbeddings.length === 0) return [];
   const scored = [];
   for (let i = 0; i < VISUAL_CATEGORIES.length; i++) {
@@ -190,7 +196,7 @@ function extractVisualTags(imageEmbedding, candidateEmbeddings, threshold = 0.23
   const tags = new Set();
 
   for (const item of scored) {
-    if (item.score >= threshold && item.score >= topScore - 0.025) {
+    if (item.score >= threshold && item.score >= topScore - 0.035) {
       for (const t of item.tags) {
         if (tags.size < 4) tags.add(t);
       }

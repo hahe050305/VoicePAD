@@ -56,6 +56,83 @@ export function detectPlateRegion() {
   return Promise.resolve(null);
 }
 
+export async function prepareImageForStorage(imageSource) {
+  try {
+    const blob = imageSource instanceof Blob ? imageSource : await (await fetch(imageSource)).blob();
+    const bitmap = await createImageBitmap(blob);
+    try {
+      const origW = bitmap.width;
+      const origH = bitmap.height;
+      const maxDim = 1440; // High clarity for phone zoom & OCR, but eliminates 20MB bloat
+      const scale = Math.min(1, maxDim / Math.max(origW, origH));
+      const width = Math.max(1, Math.round(origW * scale));
+      const height = Math.max(1, Math.round(origH * scale));
+
+      let optimizedBlob = blob;
+      // Only scale down if larger than maxDim or if blob is heavy (> 600KB)
+      if (scale < 1 || blob.size > 600 * 1024) {
+        if (typeof OffscreenCanvas === "function") {
+          const canvas = new OffscreenCanvas(width, height);
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(bitmap, 0, 0, width, height);
+            optimizedBlob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.82 });
+          }
+        } else if (typeof document !== "undefined") {
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(bitmap, 0, 0, width, height);
+            optimizedBlob = await new Promise((resolve) => {
+              canvas.toBlob((b) => resolve(b || blob), "image/jpeg", 0.82);
+            });
+          }
+        }
+      }
+
+      // Generate compact thumbnail for card preview in feed (max 400px, quality 0.75)
+      const thumbMax = 400;
+      const thumbScale = Math.min(1, thumbMax / Math.max(origW, origH));
+      const thumbW = Math.max(1, Math.round(origW * thumbScale));
+      const thumbH = Math.max(1, Math.round(origH * thumbScale));
+
+      let thumbnailBlob = null;
+      if (typeof OffscreenCanvas === "function") {
+        const thumbCanvas = new OffscreenCanvas(thumbW, thumbH);
+        const thumbCtx = thumbCanvas.getContext("2d");
+        if (thumbCtx) {
+          thumbCtx.drawImage(bitmap, 0, 0, thumbW, thumbH);
+          thumbnailBlob = await thumbCanvas.convertToBlob({ type: "image/jpeg", quality: 0.75 });
+        }
+      } else if (typeof document !== "undefined") {
+        const thumbCanvas = document.createElement("canvas");
+        thumbCanvas.width = thumbW;
+        thumbCanvas.height = thumbH;
+        const thumbCtx = thumbCanvas.getContext("2d");
+        if (thumbCtx) {
+          thumbCtx.drawImage(bitmap, 0, 0, thumbW, thumbH);
+          thumbnailBlob = await new Promise((resolve) => {
+            thumbCanvas.toBlob((b) => resolve(b), "image/jpeg", 0.75);
+          });
+        }
+      }
+
+      return {
+        optimizedBlob: optimizedBlob || blob,
+        thumbnailBlob: thumbnailBlob || optimizedBlob || blob,
+      };
+    } finally {
+      bitmap.close();
+    }
+  } catch (err) {
+    console.warn("[Vision] Image optimization fallback:", err);
+    const rawBlob = imageSource instanceof Blob ? imageSource : await (await fetch(imageSource)).blob();
+    return { optimizedBlob: rawBlob, thumbnailBlob: rawBlob };
+  }
+}
+
 export async function createImageThumbnail(imageSource) {
   // Fast, non-blocking client-side thumbnail generation
   try {

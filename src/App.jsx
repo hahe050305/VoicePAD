@@ -1,23 +1,25 @@
 // src/App.jsx
 import { useEffect, useState, useRef, useCallback } from "react";
+import { Capacitor } from "@capacitor/core";
 import { db, seedDemoData } from "./db.js";
 import { rankedSearch, fastSearch, lexicalSearch, refreshCache, getImageThumbnailUrl, setImageThumbnailUrl, getImageSource } from "./search.js";
 import { performOCR, recognizeVehiclePlate, isPureImageText, extractVehiclePlate } from "./ocr.js";
 import { deriveTags } from "./tagger.js";
 import {
   createImageThumbnail,
+  prepareImageForStorage,
   embedImage,
   subscribeVisionModelStatus,
   prewarmVisionModel,
 } from "./services/visionService.js";
 import { prewarmOCR } from "./services/tesseractService.js";
 import {
-  prewarmMoonshine,
   subscribeMoonshineStatus,
   startAudioCapture,
   stopAudioCaptureAndTranscribe,
   cancelAudioCapture,
 } from "./services/moonshineService.js";
+import { capturePhotoNativeOrWeb } from "./services/cameraAdapter.js";
 import { createId } from "./id.js";
 
 // Map detected containers and scenes to high-probability occluded objects
@@ -34,7 +36,8 @@ for (const [containerTag, chips] of Object.entries(CONTAINER_AFFORDANCES)) { if 
 }
 
 // Set of tags that are either generic, containers, or text-dependent targets where // recognition is incomplete unless OCR succeeded or the user labeled it.
-const INCOMPLETE_WITHOUT_TEXT_OR_LABEL = new Set([ "#photo", "#image", "#picture", "#bag", "#backpack", "#clothing", "#vehicle", "#car", "#motorcycle", "#licenseplate", "#document", "#receipt", "#bill", "#ticket", "#badge", "#signature", "#notes" ]);
+const GENERIC_UNSPECIFIC_TAGS = new Set(["#photo", "#image", "#picture"]);
+const INCOMPLETE_WITHOUT_TEXT_OR_LABEL = GENERIC_UNSPECIFIC_TAGS;
 
 // Determines if an image detection / OCR extraction had LOW confidence // (e.g., occluded objects, missing tags, or container scenes like a bag/coat where contents are hidden)
 export function isLowConfidenceDetection(entry) { // Existing low-confidence logic.
@@ -67,11 +70,7 @@ const hasConfidentStandaloneObject = tags.some( (t) => !INCOMPLETE_WITHOUT_TEXT_
 export function shouldShowPredictive(entry) { if (!entry || entry.type !== "image") return false;
   // If the entry already has a manual label, we don't need predictive UI.
   if (entry.label) return false;
-  // Use existing low-confidence detection logic.
-  if (isLowConfidenceDetection(entry)) return true;
-  // If OCR is missing or empty, treat as low confidence.
-  if (!entry.ocr || !entry.ocr.trim()) return true;
-  return false;
+  return isLowConfidenceDetection(entry);
 }
 
 export default function App() {
@@ -257,10 +256,9 @@ const loadEntries = useCallback(async () => { await seedDemoData();
       .catch((err) => console.error("Failed to load memories:", err));
     const unsubscribeVisionStatus = subscribeVisionModelStatus(setVisionModelStatus);
 
-// Prior prewarming: silently warms up Vision AI, OCR, and Moonshine STT in background
+// Non-blocking deferred warm up: warms up Vision AI and OCR quietly after mount without blocking phone UI
 prewarmVisionModel();
 prewarmOCR();
-prewarmMoonshine();
 
     const unsubscribeMoonshine = subscribeMoonshineStatus(setMoonshineStatus);
 
