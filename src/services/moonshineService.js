@@ -98,6 +98,7 @@ function runTask(type, payload) {
 let activeAudioContext = null;
 let activeMediaStream = null;
 let activeProcessor = null;
+let activeMuteGain = null;
 let recordedAudioChunks = [];
 let capturedSampleRate = 16000;
 
@@ -194,7 +195,12 @@ export async function startAudioCapture() {
   source.connect(highPass);
   highPass.connect(vocalBoost);
   vocalBoost.connect(processor);
-  processor.connect(ctx.destination);
+  // Keep ScriptProcessor callbacks alive without playing the microphone back.
+  const muteGain = ctx.createGain();
+  muteGain.gain.value = 0;
+  processor.connect(muteGain);
+  muteGain.connect(ctx.destination);
+  activeMuteGain = muteGain;
 
   return stream;
 }
@@ -207,14 +213,18 @@ export async function stopAudioCaptureAndTranscribe() {
   if (activeProcessor) {
     try {
       activeProcessor.disconnect();
-    } catch {}
+    } catch { /* The processor may already be disconnected. */ }
     activeProcessor = null;
+  }
+  if (activeMuteGain) {
+    try { activeMuteGain.disconnect(); } catch { /* The output node may already be disconnected. */ }
+    activeMuteGain = null;
   }
 
   if (activeMediaStream) {
     try {
       activeMediaStream.getTracks().forEach((track) => track.stop());
-    } catch {}
+    } catch { /* Tracks can already be stopped by the browser. */ }
     activeMediaStream = null;
   }
 
@@ -225,7 +235,7 @@ export async function stopAudioCaptureAndTranscribe() {
       if (activeAudioContext.state !== "closed") {
         await activeAudioContext.close();
       }
-    } catch {}
+    } catch { /* The audio context may already be closed. */ }
     activeAudioContext = null;
   }
 
@@ -257,17 +267,21 @@ export async function stopAudioCaptureAndTranscribe() {
 
 export function cancelAudioCapture() {
   if (activeProcessor) {
-    try { activeProcessor.disconnect(); } catch {}
+    try { activeProcessor.disconnect(); } catch { /* The processor may already be disconnected. */ }
     activeProcessor = null;
   }
+  if (activeMuteGain) {
+    try { activeMuteGain.disconnect(); } catch { /* The output node may already be disconnected. */ }
+    activeMuteGain = null;
+  }
   if (activeMediaStream) {
-    try { activeMediaStream.getTracks().forEach((track) => track.stop()); } catch {}
+    try { activeMediaStream.getTracks().forEach((track) => track.stop()); } catch { /* Tracks can already be stopped. */ }
     activeMediaStream = null;
   }
   if (activeAudioContext) {
     try {
       if (activeAudioContext.state !== "closed") activeAudioContext.close();
-    } catch {}
+    } catch { /* The audio context may already be closed. */ }
     activeAudioContext = null;
   }
   recordedAudioChunks = [];

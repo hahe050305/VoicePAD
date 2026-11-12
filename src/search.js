@@ -168,6 +168,10 @@ export function getImageThumbnailUrl(imageId, thumbnailBlob) {
 }
 
 export function setImageThumbnailUrl(imageId, url) {
+  const previousUrl = imageThumbnailUrls.get(imageId);
+  if (previousUrl && previousUrl !== url && previousUrl.startsWith("blob:")) {
+    URL.revokeObjectURL(previousUrl);
+  }
   imageThumbnailUrls.set(imageId, url);
 }
 

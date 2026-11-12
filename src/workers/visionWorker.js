@@ -3,6 +3,7 @@
 // Generates unified 512-dimensional multimodal embeddings for zero-tag visual search.
 
 let clipPromise = null;
+let candidatePromptEmbeddingsPromise = null;
 
 const LOW_MEMORY_DEVICE =
   typeof navigator !== "undefined" &&
@@ -38,7 +39,7 @@ async function getClipModels() {
         env,
       } = await import("@huggingface/transformers");
 
-      let isCacheAvailable = false;
+      let isCacheAvailable;
       try {
         isCacheAvailable = typeof caches !== "undefined" && typeof caches.open === "function";
       } catch {
@@ -73,6 +74,7 @@ async function getClipModels() {
         }),
       ]);
 
+      await getCandidateEmbeddings(tokenizer, textModel);
       publishModelStatus({ state: "ready", progress: 100 });
       return { tokenizer, processor, textModel, visionModel };
     })().catch((error) => {
@@ -149,29 +151,37 @@ let candidatePromptEmbeddings = null;
 
 async function getCandidateEmbeddings(tokenizer, textModel) {
   if (candidatePromptEmbeddings) return candidatePromptEmbeddings;
-  const prompts = VISUAL_CATEGORIES.map((c) => c.prompt);
-  const inputs = tokenizer(prompts, { padding: true, truncation: true });
-  const { text_embeds } = await textModel(inputs);
-  const dim = 512;
-  const data = text_embeds.data;
-  const rows = [];
-  for (let i = 0; i < VISUAL_CATEGORIES.length; i++) {
-    const offset = i * dim;
-    const row = new Float32Array(dim);
-    let sum = 0;
-    for (let j = 0; j < dim; j++) {
-      const v = data[offset + j];
-      row[j] = v;
-      sum += v * v;
-    }
-    const norm = Math.sqrt(sum) || 1e-12;
-    for (let j = 0; j < dim; j++) {
-      row[j] /= norm;
-    }
-    rows.push(row);
+  if (!candidatePromptEmbeddingsPromise) {
+    candidatePromptEmbeddingsPromise = (async () => {
+      const prompts = VISUAL_CATEGORIES.map((c) => c.prompt);
+      const inputs = tokenizer(prompts, { padding: true, truncation: true });
+      const { text_embeds } = await textModel(inputs);
+      const dim = 512;
+      const data = text_embeds.data;
+      const rows = [];
+      for (let i = 0; i < VISUAL_CATEGORIES.length; i++) {
+        const offset = i * dim;
+        const row = new Float32Array(dim);
+        let sum = 0;
+        for (let j = 0; j < dim; j++) {
+          const v = data[offset + j];
+          row[j] = v;
+          sum += v * v;
+        }
+        const norm = Math.sqrt(sum) || 1e-12;
+        for (let j = 0; j < dim; j++) {
+          row[j] /= norm;
+        }
+        rows.push(row);
+      }
+      candidatePromptEmbeddings = rows;
+      return rows;
+    })().catch((error) => {
+      candidatePromptEmbeddingsPromise = null;
+      throw error;
+    });
   }
-  candidatePromptEmbeddings = rows;
-  return candidatePromptEmbeddings;
+  return candidatePromptEmbeddingsPromise;
 }
 
 function extractVisualTags(imageEmbedding, candidateEmbeddings, threshold = 0.19) {

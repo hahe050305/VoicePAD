@@ -20,13 +20,20 @@ function updateVisionModelStatus(status) {
 }
 
 /** Prewarm the CLIP models in the background */
-export function prewarmVisionModel(delay = 600) {
+let visionWarmupPromise = null;
+
+export function prewarmVisionModel(delay = 0) {
   if (typeof window === "undefined") return;
-  setTimeout(() => {
-    runVisionTask("warmup", null).catch((err) => {
-      console.warn("[Vision] CLIP Model pre-warming skipped:", err);
-    });
-  }, delay);
+  if (!visionWarmupPromise) {
+    visionWarmupPromise = new Promise((resolve) => setTimeout(resolve, delay))
+      .then(() => runVisionTask("warmup", null))
+      .catch((err) => {
+        visionWarmupPromise = null;
+        console.warn("[Vision] CLIP Model pre-warming skipped:", err);
+        return null;
+      });
+  }
+  return visionWarmupPromise;
 }
 
 /** Extract 512-dimensional normalized vector embedding from an image */
@@ -56,7 +63,7 @@ export function detectPlateRegion() {
   return Promise.resolve(null);
 }
 
-export async function prepareImageForStorage(imageSource) {
+export async function prepareImageForStorage(imageSource, { includeThumbnail = true } = {}) {
   try {
     const blob = imageSource instanceof Blob ? imageSource : await (await fetch(imageSource)).blob();
     const bitmap = await createImageBitmap(blob);
@@ -93,29 +100,31 @@ export async function prepareImageForStorage(imageSource) {
       }
 
       // Generate compact thumbnail for card preview in feed (max 400px, quality 0.75)
-      const thumbMax = 400;
-      const thumbScale = Math.min(1, thumbMax / Math.max(origW, origH));
-      const thumbW = Math.max(1, Math.round(origW * thumbScale));
-      const thumbH = Math.max(1, Math.round(origH * thumbScale));
-
       let thumbnailBlob = null;
-      if (typeof OffscreenCanvas === "function") {
-        const thumbCanvas = new OffscreenCanvas(thumbW, thumbH);
-        const thumbCtx = thumbCanvas.getContext("2d");
-        if (thumbCtx) {
-          thumbCtx.drawImage(bitmap, 0, 0, thumbW, thumbH);
-          thumbnailBlob = await thumbCanvas.convertToBlob({ type: "image/jpeg", quality: 0.75 });
-        }
-      } else if (typeof document !== "undefined") {
-        const thumbCanvas = document.createElement("canvas");
-        thumbCanvas.width = thumbW;
-        thumbCanvas.height = thumbH;
-        const thumbCtx = thumbCanvas.getContext("2d");
-        if (thumbCtx) {
-          thumbCtx.drawImage(bitmap, 0, 0, thumbW, thumbH);
-          thumbnailBlob = await new Promise((resolve) => {
-            thumbCanvas.toBlob((b) => resolve(b), "image/jpeg", 0.75);
-          });
+      if (includeThumbnail) {
+        const thumbMax = 400;
+        const thumbScale = Math.min(1, thumbMax / Math.max(origW, origH));
+        const thumbW = Math.max(1, Math.round(origW * thumbScale));
+        const thumbH = Math.max(1, Math.round(origH * thumbScale));
+
+        if (typeof OffscreenCanvas === "function") {
+          const thumbCanvas = new OffscreenCanvas(thumbW, thumbH);
+          const thumbCtx = thumbCanvas.getContext("2d");
+          if (thumbCtx) {
+            thumbCtx.drawImage(bitmap, 0, 0, thumbW, thumbH);
+            thumbnailBlob = await thumbCanvas.convertToBlob({ type: "image/jpeg", quality: 0.75 });
+          }
+        } else if (typeof document !== "undefined") {
+          const thumbCanvas = document.createElement("canvas");
+          thumbCanvas.width = thumbW;
+          thumbCanvas.height = thumbH;
+          const thumbCtx = thumbCanvas.getContext("2d");
+          if (thumbCtx) {
+            thumbCtx.drawImage(bitmap, 0, 0, thumbW, thumbH);
+            thumbnailBlob = await new Promise((resolve) => {
+              thumbCanvas.toBlob((b) => resolve(b), "image/jpeg", 0.75);
+            });
+          }
         }
       }
 

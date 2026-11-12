@@ -68,10 +68,11 @@ const hasConfidentStandaloneObject = tags.some( (t) => !INCOMPLETE_WITHOUT_TEXT_
 
 // Additional helper to decide when to display predictive labeling UI.
 // Shows UI for low-confidence detections *or* when OCR is empty/whitespace.
-export function shouldShowPredictive(entry) { if (!entry || entry.type !== "image") return false;
-  // If the entry already has a manual label, we don't need predictive UI.
-  if (entry.label) return false;
-  return isLowConfidenceDetection(entry);
+export function shouldShowPredictive(entry) {
+  if (!entry || entry.type !== "image" || entry.label) return false;
+  // Wait for the OCR/CLIP pass to finish before showing suggestions. New images
+  // start with generic placeholder tags, which are not a low-confidence result.
+  return entry.clipFailed === true && isLowConfidenceDetection(entry);
 }
 
 export default function App() {
@@ -200,6 +201,8 @@ getImageSource(selectedEntry.id)
   }, [selectedEntry?.id, selectedEntry?.type]);
 
   const recognizerRef = useRef(null);
+  const listeningRef = useRef(false);
+  const speechRecognitionUnavailableRef = useRef(false);
   const audioStreamRef = useRef(null);
   const audioContextRef = useRef(null);
   const audioAnalyserRef = useRef(null);
@@ -355,23 +358,34 @@ useEffect(() => { const SpeechRecognition = window.SpeechRecognition || window.w
     if (!SpeechRecognition) return;
 
 const recognizer = new SpeechRecognition();
-recognizer.continuous = false;
+      recognizer.continuous = true;
 recognizer.interimResults = true;
 recognizer.lang = "en-US";
 
 recognizer.onstart = () => {
-  setIsListening(true);
+  if (listeningRef.current) setIsListening(true);
+  else recognizer.stop();
 };
 
 recognizer.onend = () => {
-  setIsListening(false);
-  stopAudioPipeline();
+  // Browser speech recognition often ends after a short silence even when the
+  // user is still recording with Moonshine. Restart only the live preview.
+  if (listeningRef.current && !speechRecognitionUnavailableRef.current) {
+    window.setTimeout(() => {
+      if (!listeningRef.current || speechRecognitionUnavailableRef.current) return;
+      try { recognizer.start(); } catch { /* The recognizer may still be closing. */ }
+    }, 150);
+  } else if (!listeningRef.current) {
+    stopAudioPipeline();
+  }
 };
 
 recognizer.onerror = (e) => {
   console.debug("Speech recognition error:", e.error);
-  setIsListening(false);
-  stopAudioPipeline();
+  if (["not-allowed", "service-not-allowed", "audio-capture", "network"].includes(e.error)) {
+    // Web Speech is only an optional live transcript; keep Moonshine recording.
+    speechRecognitionUnavailableRef.current = true;
+  }
 };
 
 recognizer.onresult = (e) => {
@@ -427,12 +441,16 @@ searchDebounceRef.current = setTimeout(async () => {
     recognizerRef.current = recognizer;
 
     return () => {
+      listeningRef.current = false;
+      try { recognizer.stop(); } catch { /* The recognizer may already be stopped. */ }
+      cancelAudioCapture();
       stopAudioPipeline();
     };
   }, [hasVoiceEnergy, stopAudioPipeline]);
 
   const toggleListening = async () => {
-    if (isListening) {
+    if (listeningRef.current) {
+      listeningRef.current = false;
       setIsListening(false);
       try {
         recognizerRef.current?.stop();
@@ -465,16 +483,23 @@ try {
         setIsTranscribing(false);
       }
     } else {
+      listeningRef.current = true;
+      speechRecognitionUnavailableRef.current = false;
       setIsListening(true);
       setVoiceTranscript("");
       try {
 // Start hardware-level noise reduction and 16kHz audio buffer capture
 await startAudioCapture();
+        if (!listeningRef.current) {
+          cancelAudioCapture();
+          return;
+        }
         try {
           recognizerRef.current?.start();
         } catch {
 // WebSpeech is optional live preview helper
 } } catch (err) { console.error("[Moonshine] Failed to activate microphone:", err);
+        listeningRef.current = false;
         setIsListening(false);
         cancelAudioCapture();
       }
@@ -482,6 +507,9 @@ await startAudioCapture();
   };
 
   const clearVoiceSearch = () => {
+    listeningRef.current = false;
+    setIsListening(false);
+    try { recognizerRef.current?.stop(); } catch { /* Recognition may already be stopped. */ }
     setVoiceTranscript("");
     setSearchMode("all");
     setFilteredEntries(allEntries.slice(0, 20));
@@ -852,13 +880,14 @@ const extractTagsFromText = (text) => { if (!text || !text.trim()) return ["#ima
       const newEntries = await Promise.all(
         rawFiles.map(async (file, i) => {
           const id = createId();
-          const { optimizedBlob, thumbnailBlob } = await prepareImageForStorage(file);
-          const thumbUrl = getImageThumbnailUrl(id, thumbnailBlob);
+          // Create a blob URL immediately; decode and compact the thumbnail in
+          // the background so a large camera image never holds up the feed.
+          const thumbUrl = getImageThumbnailUrl(id, file);
           return {
             id,
             type: "image",
-            imageBlob: optimizedBlob,
-            thumbnailBlob,
+            imageBlob: file,
+            thumbnailBlob: file,
             thumbnailUrl: thumbUrl,
             label: "",
             ocr: "",
@@ -885,6 +914,31 @@ const extractTagsFromText = (text) => { if (!text || !text.trim()) return ["#ima
 
           try {
             console.log(`[Vision] Embedding image ${i + 1}/${newEntries.length}...`);
+
+            const optimizePromise = prepareImageForStorage(file)
+              .then(async ({ optimizedBlob, thumbnailBlob }) => {
+                const patch = { imageBlob: optimizedBlob };
+                if (thumbnailBlob && thumbnailBlob !== file) {
+                  patch.thumbnailBlob = thumbnailBlob;
+                  const thumbnailUrl = URL.createObjectURL(thumbnailBlob);
+                  setImageThumbnailUrl(entry.id, thumbnailUrl);
+                  setSelectedImage((current) => current?.id === entry.id
+                    ? { ...current, url: thumbnailUrl, preview: true }
+                    : current);
+                  const updatePreview = (item) => item.id === entry.id
+                    ? { ...item, thumbnailUrl }
+                    : item;
+                  setFilteredEntries((current) => current.map(updatePreview));
+                  setAllEntries((current) => current.map(updatePreview));
+                  setSelectedEntry((current) => current?.id === entry.id
+                    ? updatePreview(current)
+                    : current);
+                }
+                await db.images.update(entry.id, patch);
+              })
+              .catch((optimizationError) => {
+                console.warn("[Vision] Image optimization skipped:", optimizationError);
+              });
 
             const isValidTag = (tag) => {
               const clean = tag.replace("#", "").toLowerCase();
@@ -972,7 +1026,7 @@ const extractTagsFromText = (text) => { if (!text || !text.trim()) return ["#ima
               }
             })();
 
-            await Promise.all([ocrPromise, embedPromise]);
+            await Promise.all([ocrPromise, embedPromise, optimizePromise]);
 
             // Low-confidence check: Did CLIP / OCR fail to classify or find a specific object?
             const updatedRecord = await db.images.get(entry.id);
@@ -1467,14 +1521,6 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
       const isPureImage =
         entry.type === "image" &&
         (entry.isPureImage === true || (!entry.ocr && !entry.label) || isPureImageText(entry.ocr));
-      const isClipFailed =
-        entry.type === "image" &&
-        (entry.clipFailed === true ||
-          (!entry.label &&
-            (!entry.tags ||
-              entry.tags.length === 0 ||
-              entry.tags.every((t) => t === "#photo" || t === "#image" || t === "#picture")) &&
-            (!entry.ocr || !entry.ocr.trim() || isPureImageText(entry.ocr))));
 
     return (
       <div
@@ -1482,7 +1528,11 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
         onClick={() => {
           if (!isEditing && quickLabelingId !== entry.id) {
             setOcrExpandedId(null);
-            setSelectedImage(null);
+            setSelectedImage(
+              entry.type === "image" && entry.thumbnailUrl
+                ? { id: entry.id, url: entry.thumbnailUrl, preview: true }
+                : null
+            );
             setSelectedEntry(entry);
           }
         }}
@@ -1697,7 +1747,7 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
                 </div>
 
                 {/* Contextual 1-Tap Predictive Ribbon & Manual Option (ONLY for low confidence / occluded images) */}
-                {isLowConfidenceDetection(entry) && (
+                {shouldShowPredictive(entry) && (
                   <div
                     onClick={(e) => e.stopPropagation()}
                     className="p-2.5 rounded-2xl bg-white/[0.02] border border-indigo-500/20 flex flex-col gap-2 mt-2 transition"
@@ -2018,7 +2068,7 @@ return (
             </span>
           ) : modalEntry.type === "image" ? (
             <div className="flex items-center gap-1.5 flex-wrap">
-              {isLowConfidenceDetection(modalEntry) &&
+              {shouldShowPredictive(modalEntry) &&
                 getPredictiveChips(modalEntry).slice(0, 3).map((chip) => (
                   <button
                     key={chip.label}
