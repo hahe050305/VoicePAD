@@ -20,13 +20,13 @@ function updateVisionModelStatus(status) {
 }
 
 /** Prewarm the CLIP models in the background */
-export function prewarmVisionModel() {
+export function prewarmVisionModel(delay = 600) {
   if (typeof window === "undefined") return;
   setTimeout(() => {
     runVisionTask("warmup", null).catch((err) => {
       console.warn("[Vision] CLIP Model pre-warming skipped:", err);
     });
-  }, 2000);
+  }, delay);
 }
 
 /** Extract 512-dimensional normalized vector embedding from an image */

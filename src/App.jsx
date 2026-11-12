@@ -14,6 +14,7 @@ import {
 } from "./services/visionService.js";
 import { prewarmOCR } from "./services/tesseractService.js";
 import {
+  prewarmMoonshine,
   subscribeMoonshineStatus,
   startAudioCapture,
   stopAudioCaptureAndTranscribe,
@@ -256,8 +257,9 @@ const loadEntries = useCallback(async () => { await seedDemoData();
       .catch((err) => console.error("Failed to load memories:", err));
     const unsubscribeVisionStatus = subscribeVisionModelStatus(setVisionModelStatus);
 
-// Non-blocking deferred warm up: warms up Vision AI and OCR quietly after mount without blocking phone UI
+// Progressive background warm-up: prewarms Vision AI, Moonshine STT, and OCR in background workers without freezing the UI
 prewarmVisionModel();
+prewarmMoonshine();
 prewarmOCR();
 
     const unsubscribeMoonshine = subscribeMoonshineStatus(setMoonshineStatus);
@@ -843,209 +845,216 @@ const extractTagsFromText = (text) => { if (!text || !text.trim()) return ["#ima
     return tags.length > 0 ? Array.from(new Set([...tags, "#image"])) : ["#image", "#photo"];
   };
 
+  const processAndStoreImages = async (rawFiles) => {
+    if (!rawFiles || rawFiles.length === 0) return;
+
+    try {
+      const newEntries = await Promise.all(
+        rawFiles.map(async (file, i) => {
+          const id = createId();
+          const { optimizedBlob, thumbnailBlob } = await prepareImageForStorage(file);
+          const thumbUrl = getImageThumbnailUrl(id, thumbnailBlob);
+          return {
+            id,
+            type: "image",
+            imageBlob: optimizedBlob,
+            thumbnailBlob,
+            thumbnailUrl: thumbUrl,
+            label: "",
+            ocr: "",
+            isPureImage: true,
+            tags: ["#image", "#photo"],
+            timestamp: Date.now() + i,
+          };
+        })
+      );
+      newEntries.forEach((entry) => thumbnailJobsRef.current.add(entry.id));
+
+      await db.images.bulkAdd(newEntries);
+      const updated = await refreshCache();
+      const sorted = [...updated].sort((a, b) => b.timestamp - a.timestamp);
+      setAllEntries(sorted);
+      setFilteredEntries(sorted.slice(0, 20));
+
+      // Run OCR & CLIP Vector Embedding silently in background
+      const processingTask = (async () => {
+        for (let i = 0; i < newEntries.length; i++) {
+          const entry = newEntries[i];
+          const file = entry.imageBlob;
+          if (!file) continue;
+
+          try {
+            console.log(`[Vision] Embedding image ${i + 1}/${newEntries.length}...`);
+
+            const isValidTag = (tag) => {
+              const clean = tag.replace("#", "").toLowerCase();
+              if (clean.length < 3 || !/[aeiou0-9]/.test(clean) || /(.)\1\1/.test(clean)) return false;
+              return !["npn", "wwn", "broic", "ji", "er", "te"].includes(clean);
+            };
+
+            let currentCardTags = ["#photo"];
+
+            const syncCard = async (patch) => {
+              if (patch.tags && Array.isArray(patch.tags)) {
+                const set = new Set([...currentCardTags, ...patch.tags]);
+                currentCardTags = Array.from(set)
+                  .filter(isValidTag)
+                  .sort((a, b) => (a === "#photo" ? 1 : b === "#photo" ? -1 : 0));
+                patch.tags = currentCardTags;
+              }
+              await db.images.update(entry.id, patch);
+              const updateEntry = (item) => item.id === entry.id ? { ...item, ...patch } : item;
+              setFilteredEntries((curr) => curr.map(updateEntry));
+              setAllEntries((curr) => curr.map(updateEntry));
+            };
+
+            let currentOcrText = "";
+            let currentPlate = null;
+
+            // Run OCR (Tesseract worker) and CLIP embedding (Vision worker) concurrently
+            const ocrPromise = (async () => {
+              try {
+                const ocrResult = await performOCR(file);
+                const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
+                currentPlate = typeof ocrResult === "object" && ocrResult?.plate ? ocrResult.plate : null;
+                const structuredIds = typeof ocrResult === "object" && Array.isArray(ocrResult?.structuredIds) ? ocrResult.structuredIds : [];
+                const cleanText = extractedText.trim();
+                currentOcrText = currentPlate && !cleanText.includes(currentPlate)
+                  ? `${currentPlate}\n${cleanText}`.trim()
+                  : cleanText;
+
+                const textTags = cleanText ? deriveTags(cleanText) : [];
+                const idTags = structuredIds.map((id) => `#${id.value.toLowerCase()}`);
+                const plateTags = currentPlate ? ["#vehicle", `#${currentPlate.replace(/\s+/g, "").toLowerCase()}`] : [];
+                const docTags = structuredIds.length > 0 ? ["#document"] : [];
+
+                const ocrTags = Array.from(new Set([
+                  ...textTags,
+                  ...plateTags,
+                  ...docTags,
+                  ...idTags,
+                  "#photo",
+                ])).filter(isValidTag);
+
+                // Update the UI card immediately with OCR results as soon as ready
+                await syncCard({
+                  ocr: currentOcrText,
+                  isPureImage: !currentPlate && structuredIds.length === 0 && (currentOcrText.length === 0 || isPureImageText(currentOcrText)),
+                  tags: ocrTags.length > 0 ? ocrTags : ["#photo"],
+                });
+              } catch (ocrErr) {
+                console.warn("[Vision] OCR detection pass failed:", ocrErr);
+              }
+            })();
+
+            const embedPromise = (async () => {
+              try {
+                const embedResult = await embedImage(file);
+                const embedding = Array.isArray(embedResult)
+                  ? embedResult
+                  : embedResult?.embedding;
+                const visualTags = Array.isArray(embedResult?.visualTags)
+                  ? embedResult.visualTags
+                  : [];
+
+                const patch = {};
+                if (embedding && Array.isArray(embedding)) {
+                  patch.embedding = embedding;
+                }
+                if (visualTags.length > 0) {
+                  patch.tags = visualTags;
+                }
+                if (Object.keys(patch).length > 0) {
+                  await syncCard(patch);
+                }
+              } catch (embedErr) {
+                console.warn("[Vision] CLIP embedding pass failed:", embedErr);
+              }
+            })();
+
+            await Promise.all([ocrPromise, embedPromise]);
+
+            // Low-confidence check: Did CLIP / OCR fail to classify or find a specific object?
+            const updatedRecord = await db.images.get(entry.id);
+            const isLowConfidence = isLowConfidenceDetection(updatedRecord);
+
+            if (isLowConfidence) {
+              await db.images.update(entry.id, { clipFailed: true });
+              const markFailed = (item) => item.id === entry.id ? { ...item, clipFailed: true } : item;
+              setFilteredEntries((curr) => curr.map(markFailed));
+              setAllEntries((curr) => curr.map(markFailed));
+
+              // ONLY fire the ephemeral quick-anchor toast for genuinely unclassified images
+              if (i === 0) {
+                setQuickAnchorToast((prev) => {
+                  if (prev?.timerId) clearTimeout(prev.timerId);
+                  return {
+                    entryId: entry.id,
+                    timerId: setTimeout(() => {
+                      setQuickAnchorToast((curr) => (curr?.entryId === entry.id ? null : curr));
+                    }, 8000),
+                  };
+                });
+              }
+            } else {
+              await db.images.update(entry.id, { clipFailed: false });
+              const markSuccess = (item) => item.id === entry.id ? { ...item, clipFailed: false } : item;
+              setFilteredEntries((curr) => curr.map(markSuccess));
+              setAllEntries((curr) => curr.map(markSuccess));
+              // High confidence! If any toast was queued for this image, dismiss it
+              setQuickAnchorToast((prev) => (prev?.entryId === entry.id ? null : prev));
+            }
+          } catch (err) {
+            console.error("[Vision] Image processing failed:", err);
+          } finally {
+            thumbnailJobsRef.current.delete(entry.id);
+          }
+        }
+
+        const refreshed = await refreshCache();
+        const refreshedSorted = [...refreshed].sort((a, b) => b.timestamp - a.timestamp);
+        setAllEntries(refreshedSorted);
+
+        try {
+          if (query.trim()) {
+            const ranked = await rankedSearch(query);
+            setFilteredEntries(ranked.slice(0, 20));
+          } else {
+            setFilteredEntries(refreshedSorted.slice(0, 20));
+          }
+        } catch (err) {
+          console.error("[Vision] Search refresh failed:", err);
+        }
+      })();
+
+      imageProcessingQueueRef.current = processingTask.catch((err) => {
+        console.error("[Vision] Background image processing queue failed:", err);
+        newEntries.forEach((entry) => thumbnailJobsRef.current.delete(entry.id));
+      });
+    } catch (err) {
+      console.error("Real-time image upload failed:", err);
+      alert("Error adding images. Please try again.");
+    }
+  };
+
   const handleImageCapture = async (e) => {
     const rawFiles = Array.from(e.target.files || []);
     if (rawFiles.length === 0) return;
 
-if (fileInputRef.current) fileInputRef.current.value = "";
-if (cameraInputRef.current) cameraInputRef.current.value = "";
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (cameraInputRef.current) cameraInputRef.current.value = "";
 
-try {
-  const newEntries = rawFiles.map((file, i) => {
-    const id = createId();
-    const instantUrl = URL.createObjectURL(file);
-    setImageThumbnailUrl(id, instantUrl);
-    return {
-      id,
-      type: "image",
-      imageBlob: file,
-      thumbnailUrl: instantUrl,
-      label: "",
-      ocr: "",
-      isPureImage: true,
-      tags: ["#image", "#photo"],
-      timestamp: Date.now() + i,
-    };
-  });
-  newEntries.forEach((entry) => thumbnailJobsRef.current.add(entry.id));
+    await processAndStoreImages(rawFiles);
+  };
 
-await db.images.bulkAdd(newEntries);
-const updated = await refreshCache();
-const sorted = [...updated].sort((a, b) => b.timestamp - a.timestamp);
-setAllEntries(sorted);
-setFilteredEntries(sorted.slice(0, 20));
-
-// Run OCR & CLIP Vector Embedding silently in background
-const processingTask = (async () => {
-  for (let i = 0; i < newEntries.length; i++) {
-    const entry = newEntries[i];
-    const file = rawFiles[i];
-    if (!file) continue;
-
-try {
-  console.log(`[Vision] Embedding image ${i + 1}/${newEntries.length}...`);
-
-// Generate compressed thumbnail for IndexedDB storage in background
-createImageThumbnail(file)
-  .then(async (thumbnail) => {
-    if (thumbnail) {
-      await db.images.update(entry.id, { thumbnailBlob: thumbnail });
-    }
-  })
-  .catch((err) => console.warn("[Vision] Thumbnail background generation:", err));
-
-const isValidTag = (tag) => {
-  const clean = tag.replace("#", "").toLowerCase();
-  if (clean.length < 3 || !/[aeiou0-9]/.test(clean) || /(.)\1\1/.test(clean)) return false;
-  return !["npn", "wwn", "broic", "ji", "er", "te"].includes(clean);
-};
-
-            let currentCardTags = ["#photo"];
-
-const syncCard = async (patch) => {
-  if (patch.tags && Array.isArray(patch.tags)) {
-    const set = new Set([...currentCardTags, ...patch.tags]);
-    currentCardTags = Array.from(set)
-      .filter(isValidTag)
-      .sort((a, b) => (a === "#photo" ? 1 : b === "#photo" ? -1 : 0));
-    patch.tags = currentCardTags;
-  }
-  await db.images.update(entry.id, patch);
-  const updateEntry = (item) => item.id === entry.id ? { ...item, ...patch } : item;
-  setFilteredEntries((curr) => curr.map(updateEntry));
-  setAllEntries((curr) => curr.map(updateEntry));
-};
-
-let currentOcrText = "";
-let currentPlate = null;
-
-// Run OCR (Tesseract worker) and CLIP embedding (Vision worker) concurrently
-const ocrPromise = (async () => {
-  try {
-    const ocrResult = await performOCR(file);
-    const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
-    currentPlate = typeof ocrResult === "object" && ocrResult?.plate ? ocrResult.plate : null;
-    const structuredIds = typeof ocrResult === "object" && Array.isArray(ocrResult?.structuredIds) ? ocrResult.structuredIds : [];
-    const cleanText = extractedText.trim();
-    currentOcrText = currentPlate && !cleanText.includes(currentPlate)
-      ? `${currentPlate}\n${cleanText}`.trim()
-      : cleanText;
-
-    const textTags = cleanText ? deriveTags(cleanText) : [];
-const idTags = structuredIds.map((id) => `#${id.value.toLowerCase()}`);
-const plateTags = currentPlate ? ["#vehicle", `#${currentPlate.replace(/\s+/g, "").toLowerCase()}`] : [];
-// No manual button insertion here; UI handles manual labeling separately
-    const docTags = structuredIds.length > 0 ? ["#document"] : [];
-
-const ocrTags = Array.from(new Set([
-  ...textTags,
-  ...plateTags,
-  ...docTags,
-  ...idTags,
-  "#photo",
-])).filter(isValidTag);
-
-    // Update the UI card immediately with OCR results as soon as ready
-    await syncCard({
-      ocr: currentOcrText,
-      isPureImage: !currentPlate && structuredIds.length === 0 && (currentOcrText.length === 0 || isPureImageText(currentOcrText)),
-      tags: ocrTags.length > 0 ? ocrTags : ["#photo"],
-    });
-  } catch (ocrErr) {
-    console.warn("[Vision] OCR detection pass failed:", ocrErr);
-  }
-})();
-
-const embedPromise = (async () => {
-  try {
-    const embedResult = await embedImage(file);
-    const embedding = Array.isArray(embedResult)
-      ? embedResult
-      : embedResult?.embedding;
-    const visualTags = Array.isArray(embedResult?.visualTags)
-      ? embedResult.visualTags
-      : [];
-
-    const patch = {};
-    if (embedding && Array.isArray(embedding)) {
-      patch.embedding = embedding;
-    }
-    if (visualTags.length > 0) {
-      patch.tags = visualTags;
-    }
-    if (Object.keys(patch).length > 0) {
-      await syncCard(patch);
-    }
-  } catch (embedErr) {
-    console.warn("[Vision] CLIP embedding pass failed:", embedErr);
-  }
-})();
-
-            await Promise.all([ocrPromise, embedPromise]);
-
-// Low-confidence check: Did CLIP / OCR fail to classify or find a specific object?
-// (e.g. keys inside bag, small/occluded items where CLIP produced no specific tags)
-const updatedRecord = await db.images.get(entry.id);
-const isLowConfidence = isLowConfidenceDetection(updatedRecord);
-
-if (isLowConfidence) {
-  await db.images.update(entry.id, { clipFailed: true });
-  const markFailed = (item) => item.id === entry.id ? { ...item, clipFailed: true } : item;
-  setFilteredEntries((curr) => curr.map(markFailed));
-  setAllEntries((curr) => curr.map(markFailed));
-
-  // ONLY fire the ephemeral quick-anchor toast for low-confidence / occluded images!
-  if (i === 0) {
-    setQuickAnchorToast((prev) => {
-      if (prev?.timerId) clearTimeout(prev.timerId);
-      return {
-        entryId: entry.id,
-        timerId: setTimeout(() => {
-          setQuickAnchorToast((curr) => (curr?.entryId === entry.id ? null : curr));
-        }, 8000),
-      };
-    });
-  }
-} else {
-  await db.images.update(entry.id, { clipFailed: false });
-  const markSuccess = (item) => item.id === entry.id ? { ...item, clipFailed: false } : item;
-  setFilteredEntries((curr) => curr.map(markSuccess));
-  setAllEntries((curr) => curr.map(markSuccess));
-  // High confidence! If any toast was queued for this image, dismiss it
-  setQuickAnchorToast((prev) => (prev?.entryId === entry.id ? null : prev));
-}
-
-  } catch (err) {
-    console.error("[Vision] Image processing failed:", err);
-  } finally {
-    thumbnailJobsRef.current.delete(entry.id);
-  }
-}
-
-const refreshed = await refreshCache();
-const refreshedSorted = [...refreshed].sort((a, b) => b.timestamp - a.timestamp);
-setAllEntries(refreshedSorted);
-
-  try {
-    if (query.trim()) {
-      const ranked = await rankedSearch(query);
-      setFilteredEntries(ranked.slice(0, 20));
+  const handleTakePhotoClick = async () => {
+    if (Capacitor.isNativePlatform()) {
+      const blob = await capturePhotoNativeOrWeb(cameraInputRef);
+      if (blob) {
+        await processAndStoreImages([blob]);
+      }
     } else {
-      setFilteredEntries(refreshedSorted.slice(0, 20));
-    }
-  } catch (err) {
-    console.error("[Vision] Search refresh failed:", err);
-  }
-})();
-
-imageProcessingQueueRef.current = processingTask.catch((err) => {
-  console.error("[Vision] Background image processing queue failed:", err);
-  newEntries.forEach((entry) => thumbnailJobsRef.current.delete(entry.id));
-});
-
-    } catch (err) {
-      console.error("Real-time image upload failed:", err);
-      alert("Error adding images. Please try again.");
+      cameraInputRef.current?.click();
     }
   };
 
@@ -1317,7 +1326,7 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
   />
   <button
     type="button"
-    onClick={() => cameraInputRef.current?.click()}
+    onClick={handleTakePhotoClick}
     className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-medium bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/90 backdrop-blur-md transition active:scale-95 shadow-sm"
   >
     <svg className="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">

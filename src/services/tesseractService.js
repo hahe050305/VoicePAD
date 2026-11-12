@@ -39,13 +39,13 @@ export async function getTesseractWorker() {
 }
 
 /** Pre-warm Tesseract worker without blocking or allocating excessive memory */
-export function prewarmOCR() {
+export function prewarmOCR(delay = 3200) {
   if (typeof window === "undefined") return;
   setTimeout(() => {
     getTesseractWorker().catch((err) => {
       console.warn("[OCR] Pre-warming skipped:", err);
     });
-  }, 1200);
+  }, delay);
 }
 
 /** Serialize requests because Tesseract's whitelist and page mode are worker-wide settings. */

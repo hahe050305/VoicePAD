@@ -1,4 +1,5 @@
 // src/services/moonshineService.js
+import { Capacitor } from "@capacitor/core";
 import { ensureMoonshineModelCached } from "./modelCache.js";
 
 // Client service for on-device Moonshine Speech-to-Text.
@@ -65,7 +66,7 @@ function getWorker() {
   return worker;
 }
 
-export function prewarmMoonshine() {
+export function prewarmMoonshine(delay = 1800) {
   if (typeof window === "undefined") return;
   // Ensure model assets are cached locally before warm‑up
   ensureMoonshineModelCached()
@@ -75,7 +76,7 @@ export function prewarmMoonshine() {
         runTask("warmup").catch((err) => {
           console.warn("[Moonshine] Background model pre‑warming skipped:", err);
         });
-      }, 2500);
+      }, delay);
     });
 }
 
@@ -98,12 +99,40 @@ let activeAudioContext = null;
 let activeMediaStream = null;
 let activeProcessor = null;
 let recordedAudioChunks = [];
+let capturedSampleRate = 16000;
+
+function resampleTo16k(audioBuffer, sourceSampleRate) {
+  if (!sourceSampleRate || sourceSampleRate === 16000) return audioBuffer;
+  const ratio = sourceSampleRate / 16000;
+  const newLength = Math.max(1, Math.round(audioBuffer.length / ratio));
+  const result = new Float32Array(newLength);
+  for (let i = 0; i < newLength; i++) {
+    const originIdx = i * ratio;
+    const idx0 = Math.floor(originIdx);
+    const idx1 = Math.min(idx0 + 1, audioBuffer.length - 1);
+    const weight = originIdx - idx0;
+    result[i] = audioBuffer[idx0] * (1 - weight) + audioBuffer[idx1] * weight;
+  }
+  return result;
+}
 
 /**
  * Starts recording audio from the user's microphone with hardware noise suppression,
  * echo cancellation, and auto-gain.
  */
 export async function startAudioCapture() {
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const { VoiceRecorder } = await import("capacitor-voice-recorder");
+      const perm = await VoiceRecorder.hasAudioRecordingPermission();
+      if (!perm?.value) {
+        await VoiceRecorder.requestAudioRecordingPermission();
+      }
+    } catch (e) {
+      console.warn("[Moonshine] Native mic permission check:", e);
+    }
+  }
+
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     throw new Error("Microphone capture is not supported in this browser.");
   }
@@ -123,8 +152,19 @@ export async function startAudioCapture() {
   recordedAudioChunks = [];
 
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
-  const ctx = new AudioCtx({ sampleRate: 16000 });
+  let ctx;
+  try {
+    ctx = new AudioCtx({ sampleRate: 16000 });
+  } catch {
+    ctx = new AudioCtx();
+  }
+
+  if (ctx.state === "suspended") {
+    await ctx.resume();
+  }
+
   activeAudioContext = ctx;
+  capturedSampleRate = ctx.sampleRate || 16000;
 
   const source = ctx.createMediaStreamSource(stream);
 
@@ -178,6 +218,8 @@ export async function stopAudioCaptureAndTranscribe() {
     activeMediaStream = null;
   }
 
+  const sampleRate = capturedSampleRate || activeAudioContext?.sampleRate || 16000;
+
   if (activeAudioContext) {
     try {
       if (activeAudioContext.state !== "closed") {
@@ -201,12 +243,15 @@ export async function stopAudioCaptureAndTranscribe() {
   }
   recordedAudioChunks = [];
 
-  // Minimum 0.4 seconds of speech to avoid transcribing micro-clicks
-  if (audioData.length < 16000 * 0.4) {
+  // Resample from hardware rate to 16kHz for Moonshine
+  const pcm16k = resampleTo16k(audioData, sampleRate);
+
+  // Minimum 0.3 seconds of speech to avoid transcribing micro-clicks
+  if (pcm16k.length < 16000 * 0.3) {
     return "";
   }
 
-  const result = await runTask("transcribe", audioData);
+  const result = await runTask("transcribe", pcm16k);
   return result?.text || "";
 }
 
