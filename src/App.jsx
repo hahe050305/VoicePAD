@@ -386,9 +386,8 @@ recognizer.onend = () => {
       if (!listeningRef.current || speechRecognitionUnavailableRef.current) return;
       try { recognizer.start(); } catch { /* The recognizer may still be closing. */ }
     }, 150);
-  } else if (!listeningRef.current) {
-    stopAudioPipeline();
   }
+  // Do not stop the audio pipeline here; recording continues until manual toggle.
 };
 
 recognizer.onerror = (e) => {
@@ -711,7 +710,9 @@ if (!SpeechRecognition) {
 
 try {
   const recognizer = new SpeechRecognition();
-  recognizer.continuous = false;
+  // Keep the recognizer alive for the whole card‑level recording session.
+  // This prevents the short‑silence auto‑stop that occurs when continuous is false.
+  recognizer.continuous = true;
   recognizer.interimResults = false;
   recognizer.lang = "en-US";
 
@@ -972,6 +973,7 @@ const extractTagsFromText = (text) => { if (!text || !text.trim()) return ["#ima
               const updateEntry = (item) => item.id === entry.id ? { ...item, ...patch } : item;
               setFilteredEntries((curr) => curr.map(updateEntry));
               setAllEntries((curr) => curr.map(updateEntry));
+              setSelectedEntry((curr) => curr?.id === entry.id ? updateEntry(curr) : curr);
             };
 
             let currentOcrText = "";
@@ -1553,20 +1555,6 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
         <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-              {entry.type === "image" && !isPureImage && entry.ocr && (
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setOcrExpandedId((currentId) => currentId === entry.id ? null : entry.id);
-                  }}
-                  aria-expanded={ocrExpandedId === entry.id}
-                  className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/[0.05] hover:bg-white/[0.1] text-slate-300 border border-white/[0.08] transition flex items-center gap-1"
-                >
-                  <span>📄</span>
-                  <span>{ocrExpandedId === entry.id ? "Hide text" : "Show text"}</span>
-                </button>
-              )}
               {quickLabelingId === entry.id ? (
                 <div
                   className="flex items-center gap-1.5 my-0.5"
@@ -1739,13 +1727,30 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
                     </span>
                   )}
                 </div>
-                {!isPureImage && ocrExpandedId === entry.id && entry.ocr && (
-                  <p
-                    id={`ocr-text-${entry.id}`}
-                    className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap bg-white/[0.02] p-2.5 rounded-xl border border-white/[0.04]"
-                  >
-                    {entry.ocr}
-                  </p>
+                {entry.ocr?.trim() && (
+                  <div className="rounded-xl bg-white/[0.025] border border-white/[0.05] px-2.5 py-2">
+                    <p className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Text detected</p>
+                    <p
+                      id={`ocr-text-${entry.id}`}
+                      className={`text-xs text-slate-300 leading-relaxed ${ocrExpandedId === entry.id ? "whitespace-pre-wrap" : "line-clamp-3"}`}
+                    >
+                      {entry.ocr.trim()}
+                    </p>
+                    {entry.ocr.trim().length > 180 && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setOcrExpandedId((currentId) => currentId === entry.id ? null : entry.id);
+                        }}
+                        aria-expanded={ocrExpandedId === entry.id}
+                        aria-controls={`ocr-text-${entry.id}`}
+                        className="mt-1 text-[10px] font-medium text-indigo-300 hover:text-indigo-200"
+                      >
+                        {ocrExpandedId === entry.id ? "Show less" : "Show all text"}
+                      </button>
+                    )}
+                  </div>
                 )}
                 <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                   {entry.tags?.map((tag) => (
@@ -1979,9 +1984,6 @@ return (
 {/* Centered zoomed memory modal */}
 {selectedEntry && (() => {
   const modalEntry = selectedEntry;
-  const modalPure =
-    modalEntry.type === "image" &&
-    (modalEntry.isPureImage === true || (!modalEntry.ocr && !modalEntry.label) || isPureImageText(modalEntry.ocr));
   const modalTags = modalEntry.tags || [];
 
 return (
@@ -1995,17 +1997,6 @@ return (
     >
       <div className="flex items-start justify-between gap-3 mb-2">
         <div className="flex items-center gap-1.5 flex-wrap">
-          {modalEntry.type === "image" && !modalPure && modalEntry.ocr && (
-            <button
-              type="button"
-              onClick={() => setOcrExpandedId((currentId) => currentId === modalEntry.id ? null : modalEntry.id)}
-              aria-expanded={ocrExpandedId === modalEntry.id}
-              className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 border border-white/[0.08] transition flex items-center gap-1"
-            >
-              <span>📄</span>
-              <span>{ocrExpandedId === modalEntry.id ? "Hide text" : "Show text"}</span>
-            </button>
-          )}
           {quickLabelingId === modalEntry.id ? (
             <div
               className="flex items-center gap-1.5 my-0.5"
@@ -2133,10 +2124,13 @@ return (
           <span className="text-sm text-slate-400 py-8">Loading image...</span>
         )}
       </div>
-      {!modalPure && ocrExpandedId === modalEntry.id && modalEntry.ocr && (
-        <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap bg-white/[0.03] p-3 rounded-2xl border border-white/[0.06]">
-          {modalEntry.ocr}
-        </p>
+      {modalEntry.ocr?.trim() && (
+        <div className="rounded-2xl bg-white/[0.03] border border-white/[0.06] p-3">
+          <p className="text-[10px] uppercase tracking-wide text-slate-500 mb-1.5">Text detected</p>
+          <p className="max-h-40 overflow-y-auto text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">
+            {modalEntry.ocr.trim()}
+          </p>
+        </div>
       )}
     </div>
   ) : (
