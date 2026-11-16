@@ -105,9 +105,20 @@ const [recordingCardId, setRecordingCardId] = useState(null);
 const [quickAnchorToast, setQuickAnchorToast] = useState(null);
 
 // Zoom modal state — entry selected by clicking a card
-const [selectedEntry, setSelectedEntry] = useState(null);
+  const [selectedEntry, setSelectedEntry] = useState(null);
   const [selectedImage, setSelectedImage] = useState(null);
   const [ocrExpandedId, setOcrExpandedId] = useState(null);
+  const [revealedOcrIds, setRevealedOcrIds] = useState(() => new Set());
+
+  const toggleOcrRevealed = useCallback((id, e) => {
+    if (e) e.stopPropagation();
+    setRevealedOcrIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
 // Quick First-Time Onboarding Screen state (persisted to avoid annoying repeat visits)
 const [showOnboarding, setShowOnboarding] = useState(() => { try { if (typeof window === "undefined") return true;
@@ -1601,61 +1612,83 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
                     ✕
                   </button>
                 </div>
-              ) : entry.label ? (
-                <span className="text-[10px] font-medium px-2.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setQuickLabelingId(entry.id);
-                      setQuickLabelInput(entry.label);
-                    }}
-                    className="hover:underline flex items-center gap-1 text-indigo-300 text-left"
-                    title="Click to edit label"
-                  >
-                    <span>🏷️</span>
-                    <span>{entry.label}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setQuickLabelingId(entry.id);
-                      setQuickLabelInput(entry.label);
-                    }}
-                    className="text-[9px] px-1 py-0.5 rounded bg-white/[0.08] hover:bg-white/[0.15] text-slate-300 hover:text-white transition"
-                    title="Edit label"
-                  >
-                    Edit
-                  </button>
-                </span>
-              ) : entry.type === "image" ? (
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setQuickLabelingId(entry.id);
-                      setQuickLabelInput("");
-                    }}
-                    className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 transition"
-                    title="Add label"
-                  >
-                    + Label
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => handleStartVoiceLabel(entry, e)}
-                    className={`text-[10px] font-medium px-2 py-0.5 rounded-full border transition flex items-center gap-1 ${
-                      recordingCardId === entry.id
-                        ? "bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse"
-                        : "bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 border-white/[0.08]"
-                    }`}
-                  >
-                    🎤 {recordingCardId === entry.id ? "Listening..." : "Voice Note"}
-                  </button>
+              ) : (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {entry.label ? (
+                    <span className="text-[10px] font-medium px-2.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setQuickLabelingId(entry.id);
+                          setQuickLabelInput(entry.label);
+                        }}
+                        className="hover:underline flex items-center gap-1 text-indigo-300 text-left"
+                        title="Click to edit label"
+                      >
+                        <span>🏷️</span>
+                        <span>{entry.label}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setQuickLabelingId(entry.id);
+                          setQuickLabelInput(entry.label);
+                        }}
+                        className="text-[9px] px-1 py-0.5 rounded bg-white/[0.08] hover:bg-white/[0.15] text-slate-300 hover:text-white transition"
+                        title="Edit label"
+                      >
+                        Edit
+                      </button>
+                    </span>
+                  ) : entry.type === "image" ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setQuickLabelingId(entry.id);
+                          setQuickLabelInput("");
+                        }}
+                        className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 transition"
+                        title="Add label"
+                      >
+                        + Label
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => handleStartVoiceLabel(entry, e)}
+                        className={`text-[10px] font-medium px-2 py-0.5 rounded-full border transition flex items-center gap-1 ${
+                          recordingCardId === entry.id
+                            ? "bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse"
+                            : "bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 border-white/[0.08]"
+                        }`}
+                      >
+                        🎤 {recordingCardId === entry.id ? "Listening..." : "Voice Note"}
+                      </button>
+                    </>
+                  ) : null}
+
+                  {entry.type === "image" && entry.ocr?.trim() && (
+                    <button
+                      type="button"
+                      onClick={(e) => toggleOcrRevealed(entry.id, e)}
+                      className={`text-[10px] font-medium px-2 py-0.5 rounded-full border transition flex items-center gap-1 ${
+                        revealedOcrIds.has(entry.id)
+                          ? "bg-indigo-500/20 text-indigo-300 border-indigo-500/40"
+                          : "bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 border-white/[0.08]"
+                      }`}
+                      title={revealedOcrIds.has(entry.id) ? "Hide extracted text" : "Reveal extracted text"}
+                    >
+                      <span>📄 Text</span>
+                      <span className="text-[8px] opacity-70">
+                        {revealedOcrIds.has(entry.id) ? "▲" : "▼"}
+                      </span>
+                    </button>
+                  )}
                 </div>
-              ) : null}
+              )}
             </div>
 
             {/* Inline Edit Form OR Card Content */}
@@ -1727,29 +1760,27 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
                     </span>
                   )}
                 </div>
-                {entry.ocr?.trim() && (
-                  <div className="rounded-xl bg-white/[0.025] border border-white/[0.05] px-2.5 py-2">
-                    <p className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Text detected</p>
+                {entry.ocr?.trim() && revealedOcrIds.has(entry.id) && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="rounded-xl bg-white/[0.025] border border-white/[0.05] px-2.5 py-2 animate-in fade-in duration-150"
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-[10px] uppercase tracking-wide text-slate-500 font-medium">Text detected</p>
+                      <button
+                        type="button"
+                        onClick={(e) => toggleOcrRevealed(entry.id, e)}
+                        className="text-[10px] text-slate-400 hover:text-slate-200 transition"
+                      >
+                        Hide ✕
+                      </button>
+                    </div>
                     <p
                       id={`ocr-text-${entry.id}`}
-                      className={`text-xs text-slate-300 leading-relaxed ${ocrExpandedId === entry.id ? "whitespace-pre-wrap" : "line-clamp-3"}`}
+                      className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap break-words"
                     >
                       {entry.ocr.trim()}
                     </p>
-                    {entry.ocr.trim().length > 180 && (
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setOcrExpandedId((currentId) => currentId === entry.id ? null : entry.id);
-                        }}
-                        aria-expanded={ocrExpandedId === entry.id}
-                        aria-controls={`ocr-text-${entry.id}`}
-                        className="mt-1 text-[10px] font-medium text-indigo-300 hover:text-indigo-200"
-                      >
-                        {ocrExpandedId === entry.id ? "Show less" : "Show all text"}
-                      </button>
-                    )}
                   </div>
                 )}
                 <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
@@ -2094,6 +2125,24 @@ return (
               </button>
             </div>
           ) : null}
+
+          {modalEntry.type === "image" && modalEntry.ocr?.trim() && (
+            <button
+              type="button"
+              onClick={(e) => toggleOcrRevealed(modalEntry.id, e)}
+              className={`text-[10px] font-medium px-2 py-0.5 rounded-full border transition flex items-center gap-1 ${
+                revealedOcrIds.has(modalEntry.id)
+                  ? "bg-indigo-500/20 text-indigo-300 border-indigo-500/40"
+                  : "bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 border-white/[0.08]"
+              }`}
+              title={revealedOcrIds.has(modalEntry.id) ? "Hide extracted text" : "Reveal extracted text"}
+            >
+              <span>📄 Text</span>
+              <span className="text-[8px] opacity-70">
+                {revealedOcrIds.has(modalEntry.id) ? "▲" : "▼"}
+              </span>
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-slate-500">
@@ -2124,10 +2173,19 @@ return (
           <span className="text-sm text-slate-400 py-8">Loading image...</span>
         )}
       </div>
-      {modalEntry.ocr?.trim() && (
-        <div className="rounded-2xl bg-white/[0.03] border border-white/[0.06] p-3">
-          <p className="text-[10px] uppercase tracking-wide text-slate-500 mb-1.5">Text detected</p>
-          <p className="max-h-40 overflow-y-auto text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">
+      {modalEntry.ocr?.trim() && revealedOcrIds.has(modalEntry.id) && (
+        <div className="rounded-2xl bg-white/[0.03] border border-white/[0.06] p-3 animate-in fade-in duration-150">
+          <div className="flex items-center justify-between mb-1.5">
+            <p className="text-[10px] uppercase tracking-wide text-slate-500 font-medium">Text detected</p>
+            <button
+              type="button"
+              onClick={(e) => toggleOcrRevealed(modalEntry.id, e)}
+              className="text-[10px] text-slate-400 hover:text-slate-200 transition"
+            >
+              Hide ✕
+            </button>
+          </div>
+          <p className="max-h-60 overflow-y-auto text-xs text-slate-300 leading-relaxed whitespace-pre-wrap break-words">
             {modalEntry.ocr.trim()}
           </p>
         </div>
