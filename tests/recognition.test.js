@@ -142,3 +142,36 @@ test("scoreCandidateOcr penalizes noisy high-symbol strings without rewarding le
   assert.ok(cleanScore > noisyWallScore);
   assert.ok(noisyWallScore < 0);
 });
+
+test("parses two-line plate with intermediate noise line", () => {
+  assert.equal(parsePlateString("TN 59\n~\nAX 2332"), "TN 59 AX 2332");
+  assert.equal(parsePlateString("TN 59\nAX 2332"), "TN 59 AX 2332");
+});
+
+test("sanitizeOcrText rejects fragmented outdoor dirt and texture hallucinations", () => {
+  const noisyGravelText = [
+    "Pa re iy",
+    "3 FN ps i Ee A Ny 33 SS",
+    "Bon es es 5 oS 2 Gas 2 2 py Ge J Ay",
+    "ATER LE Z AL",
+    "me AY BNE",
+    "ws AEN a NE Bc",
+    "os TES a CW 2 N",
+    "4 pi N",
+    "TE AG 47",
+    "7 Fr rt AR T Fay 7",
+    "TY a LA pig NN",
+    "Fo J AE nh PE",
+    "TE i ae",
+    "fo we Gh Wags A oa SET",
+    "ey FEAT a 2 A",
+    "Bt ER yc EW Ay 2230 ANE",
+  ].join("\n");
+
+  assert.equal(sanitizeOcrText(noisyGravelText), "");
+  assert.equal(isPureImageText(noisyGravelText), true);
+});
+
+test("sanitizeOcrText isolates vehicle plate directly when detected", () => {
+  assert.equal(sanitizeOcrText("TN 59\nAX 2332"), "Vehicle Plate: TN 59 AX 2332");
+});

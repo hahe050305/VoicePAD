@@ -144,13 +144,16 @@ function findStandardPlate(rawStr) {
   }
 
   // 3. Two-line plates: e.g. Line 1: "BR 01 C", Line 2: "J 6440" or Line 1: "TN 59", Line 2: "AX 2332"
-  for (let i = 0; i < lines.length - 1; i++) {
-    const top = lines[i].replace(/[^A-Z0-9]/g, "");
-    const bottom = lines[i + 1].replace(/[^A-Z0-9]/g, "");
-    if (top.length >= 3 && top.length <= 5 && bottom.length >= 4 && bottom.length <= 7) {
-      const combined = `${top}${bottom}`;
-      if (combined.length >= 8 && combined.length <= 11) {
-        tokens.push(combined);
+  // Checks adjacent lines or lines with a 1-line gap to tolerate intermediate speckles
+  for (let i = 0; i < lines.length; i++) {
+    for (let j = i + 1; j <= Math.min(lines.length - 1, i + 2); j++) {
+      const top = lines[i].replace(/[^A-Z0-9]/g, "");
+      const bottom = lines[j].replace(/[^A-Z0-9]/g, "");
+      if (top.length >= 3 && top.length <= 6 && bottom.length >= 4 && bottom.length <= 7) {
+        const combined = `${top}${bottom}`;
+        if (combined.length >= 8 && combined.length <= 11) {
+          tokens.push(combined);
+        }
       }
     }
   }

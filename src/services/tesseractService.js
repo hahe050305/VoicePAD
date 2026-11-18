@@ -81,6 +81,63 @@ export function recognizeWithTesseract(image, {
   return task;
 }
 
+function detectPlateRegion(data, width, height) {
+  let bestScore = -1;
+  let bestRect = null;
+
+  const winWidths = [
+    Math.round(width * 0.25),
+    Math.round(width * 0.38),
+    Math.round(width * 0.50),
+  ];
+
+  for (const w of winWidths) {
+    for (const aspect of [1.4, 2.0, 3.5]) {
+      const h = Math.round(w / aspect);
+      if (h < 25 || h > height * 0.45) continue;
+
+      const yStep = Math.max(12, Math.round(height * 0.06));
+      const xStep = Math.max(12, Math.round(width * 0.06));
+
+      for (let y = Math.round(height * 0.15); y + h < height * 0.92; y += yStep) {
+        for (let x = Math.round(width * 0.08); x + w < width * 0.92; x += xStep) {
+          let sumLum = 0;
+          let edgeSum = 0;
+          let samples = 0;
+
+          for (let sampleY = y; sampleY < y + h; sampleY += 10) {
+            for (let sampleX = x; sampleX < x + w; sampleX += 10) {
+              const idx = (sampleY * width + sampleX) * 4;
+              const lum = (data[idx] * 299 + data[idx + 1] * 587 + data[idx + 2] * 114) / 1000;
+              sumLum += lum;
+
+              if (sampleX + 4 < width) {
+                const nextIdx = (sampleY * width + (sampleX + 4)) * 4;
+                const nextLum = (data[nextIdx] * 299 + data[nextIdx + 1] * 587 + data[nextIdx + 2] * 114) / 1000;
+                edgeSum += Math.abs(lum - nextLum);
+              }
+              samples++;
+            }
+          }
+
+          const meanLum = samples > 0 ? sumLum / samples : 0;
+          const meanEdge = samples > 0 ? edgeSum / samples : 0;
+
+          if (meanLum > 125 && meanEdge > 8) {
+            const score = meanLum * 0.5 + meanEdge * 2.5;
+            if (score > bestScore) {
+              bestScore = score;
+              bestRect = { x, y, width: w, height: h };
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return bestRect;
+}
+
 /**
  * Fast client-side image variant generation (< 50ms):
  * - baseline: normalized to 1200px max dimension
@@ -124,11 +181,11 @@ async function prepareFastVariants(imageSource) {
       ? await canvas.convertToBlob({ type: "image/png" })
       : await new Promise((r) => canvas.toBlob(r, "image/png"));
 
-    // Center/lower crop where vehicle plates and documents naturally sit
-    const cropX = Math.round(width * 0.08);
-    const cropY = Math.round(height * 0.20);
-    const cropW = Math.round(width * 0.84);
-    const cropH = Math.round(height * 0.75);
+    // Tighter center/lower crop focused on vehicle & document centers (excludes outer gravel/background)
+    const cropX = Math.round(width * 0.12);
+    const cropY = Math.round(height * 0.22);
+    const cropW = Math.round(width * 0.76);
+    const cropH = Math.round(height * 0.68);
 
     const cropCanvas = typeof OffscreenCanvas === "function"
       ? new OffscreenCanvas(cropW, cropH)
@@ -142,7 +199,36 @@ async function prepareFastVariants(imageSource) {
       ? await cropCanvas.convertToBlob({ type: "image/png" })
       : await new Promise((r) => cropCanvas.toBlob(r, "image/png"));
 
-    return { baseline: baselineBlob, contrast: contrastBlob, crop: cropBlob };
+    // Localized high-contrast plate crop
+    let plateCropBlob = null;
+    const detectedPlate = detectPlateRegion(data, width, height);
+    if (detectedPlate) {
+      const padX = Math.round(detectedPlate.width * 0.08);
+      const padY = Math.round(detectedPlate.height * 0.08);
+      const pX = Math.max(0, detectedPlate.x - padX);
+      const pY = Math.max(0, detectedPlate.y - padY);
+      const pW = Math.min(width - pX, detectedPlate.width + padX * 2);
+      const pH = Math.min(height - pY, detectedPlate.height + padY * 2);
+
+      const pCanvas = typeof OffscreenCanvas === "function"
+        ? new OffscreenCanvas(pW, pH)
+        : document.createElement("canvas");
+      pCanvas.width = pW;
+      pCanvas.height = pH;
+      const pCtx = pCanvas.getContext("2d");
+      pCtx.drawImage(canvas, pX, pY, pW, pH, 0, 0, pW, pH);
+
+      plateCropBlob = pCanvas.convertToBlob
+        ? await pCanvas.convertToBlob({ type: "image/png" })
+        : await new Promise((r) => pCanvas.toBlob(r, "image/png"));
+    }
+
+    return {
+      baseline: baselineBlob,
+      contrast: contrastBlob,
+      crop: cropBlob,
+      plateCrop: plateCropBlob,
+    };
   } finally {
     bitmap.close();
   }
@@ -207,24 +293,30 @@ export async function recognizeWithTesseractEnhancements(image, options = {}) {
     }
   };
 
-  // PASS 1: Baseline image with PSM 6 (Single uniform block of text)
-  const pass1 = await testPass(variants.baseline, "6");
-  if (pass1?.hasPlate || (pass1?.score || 0) >= 70) {
+  // PASS 0: If targeted plate candidate crop was detected, test it with PSM 6
+  if (variants.plateCrop) {
+    const platePass = await testPass(variants.plateCrop, "6");
+    if (platePass?.hasPlate || (options.plate && (platePass?.score || 0) >= 50)) {
+      return platePass.result;
+    }
+  }
+
+  // PASS 1: Focused center crop (catches vehicle plates and centered cards without background gravel)
+  const pass1 = await testPass(variants.crop, "6");
+  if (pass1?.hasPlate || (!options.plate && (pass1?.score || 0) >= 70)) {
     return pass1.result;
   }
 
-  // PASS 2: Contrast-enhanced with PSM 11 (Sparse text)
-  const pass2 = await testPass(variants.contrast, "11");
-  if (pass2?.hasPlate || (pass2?.score || 0) >= 70) {
+  // PASS 2: Contrast-enhanced image (use PSM 6 for plates, PSM 11 for sparse documents)
+  const pass2 = await testPass(variants.contrast, options.plate ? "6" : "11");
+  if (pass2?.hasPlate || (!options.plate && (pass2?.score || 0) >= 70)) {
     return pass2.result;
   }
 
-  // PASS 3: Focused center crop with PSM 6 (Catches 2-line motorcycle plates & centered cards)
-  if (!pass1?.hasPlate && !pass2?.hasPlate) {
-    const pass3 = await testPass(variants.crop, "6");
-    if (pass3?.hasPlate) {
-      return pass3.result;
-    }
+  // PASS 3: Baseline image
+  const pass3 = await testPass(variants.baseline, "6");
+  if (pass3?.hasPlate) {
+    return pass3.result;
   }
 
   return bestResult || pass1?.result || { data: { text: "", confidence: 0 } };

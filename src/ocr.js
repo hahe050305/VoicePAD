@@ -19,8 +19,12 @@ export function sanitizeOcrText(rawText) {
   const trimmed = rawText.trim();
   if (!trimmed) return "";
 
-  // Check if plate or structured ID is present
+  // If a valid vehicle plate is found, return ONLY the formatted plate!
   const plate = parsePlateString(trimmed);
+  if (plate) {
+    return `Vehicle Plate: ${plate}`;
+  }
+
   const structuredIds = extractStructuredIds(trimmed);
 
   const lines = trimmed.split(/[\r\n]+/);
@@ -53,23 +57,38 @@ export function sanitizeOcrText(rawText) {
     // Drop line if alphanumeric content is less than 50%
     if (lineRatio < 0.5) continue;
 
-    // Drop single-char noise lines unless it's part of a detected structured ID or plate
-    if (alphanumChars < 2 && !plate && structuredIds.length === 0) continue;
+    // Filter texture hallucination noise (e.g. "Pa re iy", "3 FN ps i Ee A Ny 33 SS", "ws AEN a NE Bc")
+    const lineWords = line.split(/\s+/).filter(Boolean);
+    if (lineWords.length >= 2 && structuredIds.length === 0) {
+      const shortWordCount = lineWords.filter((w) => w.length <= 2).length;
+      const shortWordRatio = shortWordCount / lineWords.length;
+      const avgWordLength = nonSpaceChars.length / lineWords.length;
+
+      // In real text lines, having >= 65% short 1-2 char words or low avg length (< 2.5) indicates random noise
+      if (shortWordRatio >= 0.65 || avgWordLength < 2.5) {
+        continue;
+      }
+    } else if (lineWords.length === 1 && structuredIds.length === 0) {
+      // Single word of <= 2 characters is noise
+      if (lineWords[0].length <= 2) {
+        continue;
+      }
+    }
 
     cleanedLines.push(line);
   }
 
   const resultText = cleanedLines.join("\n").trim();
   if (!resultText) {
-    return plate ? `Vehicle Plate: ${plate}` : "";
+    return "";
   }
 
   const totalNonSpace = resultText.replace(/\s+/g, "");
   const totalAlphanum = (totalNonSpace.match(/[a-zA-Z0-9]/g) || []).length;
   const overallRatio = totalNonSpace.length > 0 ? totalAlphanum / totalNonSpace.length : 0;
 
-  // Treat outputs as empty if alphanumeric ratio is below 60% (and no plate/ID present)
-  if (overallRatio < 0.60 && !plate && structuredIds.length === 0) {
+  // Treat outputs as empty if alphanumeric ratio is below 60% (and no ID present)
+  if (overallRatio < 0.60 && structuredIds.length === 0) {
     return "";
   }
 
@@ -349,27 +368,51 @@ async function _performOCR(file, onProgress) {
     });
   }
 
-  const plateRecognition = await recognizePlateCandidate(file, result.text, onProgress);
-  const recognizedText = plateRecognition.text;
-  const confidence = result.confidence;
+  let recognizedText = result.text || "";
+  let confidence = result.confidence || 0;
 
-  // Apply OCR post-processing filter to strip punctuation noise, speckles, and low-alphanumeric text
+  // 1. Check if primary pass recognized a vehicle plate directly
+  let plate = extractVehiclePlate(recognizedText);
+
+  // 2. If no plate found from primary full-frame pass, run targeted plate pass
+  // with plate character whitelist and plate-focused candidate crops
+  if (!plate) {
+    try {
+      const plateResult = await recognizeVehiclePlate(file, onProgress);
+      if (plateResult.plate) {
+        plate = plateResult.plate;
+        confidence = Math.max(confidence, plateResult.confidence || 85);
+      }
+    } catch (plateErr) {
+      console.warn("[OCR] Targeted plate pass failed:", plateErr);
+    }
+  }
+
+  // 3. If a vehicle plate is found, display ONLY the clean plate text
+  if (plate) {
+    return {
+      text: `Vehicle Plate: ${plate}`,
+      rawText: plate,
+      isPureImage: false,
+      confidence: Math.max(confidence, 85),
+      plate,
+      plateOcrAttempted: true,
+      structuredIds: [],
+    };
+  }
+
+  // 4. Otherwise, sanitize general text and check for structured IDs (PAN, Aadhaar, etc.)
   const sanitizedText = sanitizeOcrText(recognizedText);
-  const plate = extractVehiclePlate(sanitizedText) || extractVehiclePlate(recognizedText);
   const structuredIds = extractStructuredIds(sanitizedText);
-
   const cleanDisplayText = sanitizedText.trim();
-  const displayText = plate && !cleanDisplayText.includes(plate)
-    ? `Vehicle Plate: ${plate}\n${cleanDisplayText}`.trim()
-    : cleanDisplayText;
 
   return {
-    text: displayText,
+    text: cleanDisplayText,
     rawText: recognizedText,
-    isPureImage: isPureImageText(displayText),
+    isPureImage: isPureImageText(cleanDisplayText),
     confidence,
-    plate,
-    plateOcrAttempted: plateRecognition.attempted,
+    plate: null,
+    plateOcrAttempted: true,
     structuredIds,
   };
 }
