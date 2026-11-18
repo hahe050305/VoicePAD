@@ -67,36 +67,19 @@ async function enhance(image) {
     const rows = Math.ceil(height / tileSize);
 
     const enhanced = context.createImageData(width, height);
-    const binary = context.createImageData(width, height);
     for (let pixel = 0; pixel < luminance.length; pixel++) {
       const offset = pixel * 4;
       const value = luminance[pixel];
-      const x = pixel % width;
-      const y = Math.floor(pixel / width);
-      const localMean = interpolateLocalMean(
-        x, y, tileSize, localMeans, columns, rows
-      );
       // Increase local legibility while retaining grayscale anti-aliasing.
-      const contrast = Math.max(0, Math.min(255, Math.round((value - 128) * 1.35 + 128)));
+      const contrast = Math.max(0, Math.min(255, Math.round((value - 128) * 1.25 + 128)));
       enhanced.data[offset] = contrast;
       enhanced.data[offset + 1] = contrast;
       enhanced.data[offset + 2] = contrast;
       enhanced.data[offset + 3] = 255;
-
-      const binaryValue = value < localMean - 12 ? 0 : 255;
-      binary.data[offset] = binaryValue;
-      binary.data[offset + 1] = binaryValue;
-      binary.data[offset + 2] = binaryValue;
-      binary.data[offset + 3] = 255;
     }
 
     context.putImageData(enhanced, 0, 0);
     const contrastBlob = await canvas.convertToBlob({ type: "image/png" });
-    const binaryCanvas = new OffscreenCanvas(width, height);
-    const binaryContext = binaryCanvas.getContext("2d");
-    if (!binaryContext) throw new Error("Could not create OCR threshold canvas.");
-    binaryContext.putImageData(binary, 0, 0);
-    const binaryBlob = await binaryCanvas.convertToBlob({ type: "image/png" });
 
     const rotated = [];
     for (const angle of [90, 270]) {
@@ -111,23 +94,21 @@ async function enhance(image) {
 
     const focusedRegions = [];
     for (const region of regions) {
-      for (const sourceCanvas of [canvas, binaryCanvas]) {
-        const crop = new OffscreenCanvas(region.width, region.height);
-        const cropContext = crop.getContext("2d");
-        if (!cropContext) continue;
-        cropContext.drawImage(
-          sourceCanvas,
-          region.x,
-          region.y,
-          region.width,
-          region.height,
-          0,
-          0,
-          region.width,
-          region.height
-        );
-        focusedRegions.push(await crop.convertToBlob({ type: "image/png" }));
-      }
+      const crop = new OffscreenCanvas(region.width, region.height);
+      const cropContext = crop.getContext("2d");
+      if (!cropContext) continue;
+      cropContext.drawImage(
+        canvas,
+        region.x,
+        region.y,
+        region.width,
+        region.height,
+        0,
+        0,
+        region.width,
+        region.height
+      );
+      focusedRegions.push(await crop.convertToBlob({ type: "image/png" }));
     }
 
     const scannerFoundRegions = openCvVariants.perspectiveVariants.length > 0;
@@ -140,7 +121,7 @@ async function enhance(image) {
       },
       variants: openCvVariants.variants.length > 0
         ? openCvVariants.variants
-        : [contrastBlob, binaryBlob],
+        : [contrastBlob],
       perspectiveVariants: openCvVariants.perspectiveVariants.slice(0, 3),
       focusedRegions: scannerFoundRegions ? [] : focusedRegions.slice(0, 2),
       rotated,

@@ -113,7 +113,7 @@ async function prepareFastVariants(imageSource) {
     const data = imgData.data;
     for (let i = 0; i < data.length; i += 4) {
       const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      const contrast = Math.max(0, Math.min(255, (gray - 128) * 1.6 + 128));
+      const contrast = Math.max(0, Math.min(255, Math.round((gray - 128) * 1.25 + 128)));
       data[i] = contrast;
       data[i + 1] = contrast;
       data[i + 2] = contrast;
@@ -148,6 +148,28 @@ async function prepareFastVariants(imageSource) {
   }
 }
 
+export function scoreCandidateOcr(text, confidence, hasPlate) {
+  if (!text || !text.trim()) return -100;
+  const clean = text.trim();
+  const nonSpaceChars = clean.replace(/\s+/g, "");
+  if (!nonSpaceChars.length) return -100;
+
+  const alphanumCount = (nonSpaceChars.match(/[a-zA-Z0-9]/g) || []).length;
+  const alphanumRatio = alphanumCount / nonSpaceChars.length;
+  const symbolCount = nonSpaceChars.length - alphanumCount;
+
+  // Heavily penalize high-symbol ratio and low confidence
+  const symbolPenalty = (1 - alphanumRatio) * 80 + symbolCount * 2;
+  const lowConfPenalty = confidence < 60 ? (60 - confidence) * 2 : 0;
+
+  // Reward plate presence, high confidence, and clean alphanumeric ratio
+  // Notice: "+ text.length" is completely removed so hallucinated long noise is not favored
+  const baseScore = (confidence * 0.8) + (alphanumRatio * 20);
+  const plateBonus = hasPlate ? 200 : 0;
+
+  return baseScore + plateBonus - symbolPenalty - lowConfPenalty;
+}
+
 /**
  * High-speed, high-accuracy OCR pipeline (< 1.5 seconds):
  * - Pass 1: Baseline image with PSM 6 (single text block)
@@ -174,7 +196,7 @@ export async function recognizeWithTesseractEnhancements(image, options = {}) {
       const text = result?.data?.text?.trim() || "";
       const hasPlate = !!parsePlateString(text);
       const confidence = Number(result?.data?.confidence) || 0;
-      const score = confidence + (hasPlate ? 200 : 0) + text.length;
+      const score = scoreCandidateOcr(text, confidence, hasPlate);
       if (score > bestScore) {
         bestScore = score;
         bestResult = result;
@@ -187,13 +209,13 @@ export async function recognizeWithTesseractEnhancements(image, options = {}) {
 
   // PASS 1: Baseline image with PSM 6 (Single uniform block of text)
   const pass1 = await testPass(variants.baseline, "6");
-  if (pass1?.hasPlate || (pass1?.score || 0) >= 120) {
+  if (pass1?.hasPlate || (pass1?.score || 0) >= 70) {
     return pass1.result;
   }
 
   // PASS 2: Contrast-enhanced with PSM 11 (Sparse text)
   const pass2 = await testPass(variants.contrast, "11");
-  if (pass2?.hasPlate || (pass2?.score || 0) >= 120) {
+  if (pass2?.hasPlate || (pass2?.score || 0) >= 70) {
     return pass2.result;
   }
 

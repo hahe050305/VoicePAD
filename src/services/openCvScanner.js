@@ -156,8 +156,7 @@ function createRectifiedVariants(cv, source, corners) {
   const gray = new cv.Mat();
   const denoised = new cv.Mat();
   const claheOutput = new cv.Mat();
-  const thresholded = new cv.Mat();
-  const clahe = new cv.CLAHE(2.2, new cv.Size(8, 8));
+  const clahe = new cv.CLAHE(2.0, new cv.Size(8, 8));
   try {
     cv.warpPerspective(
       source,
@@ -170,19 +169,10 @@ function createRectifiedVariants(cv, source, corners) {
     cv.cvtColor(warped, gray, cv.COLOR_RGBA2GRAY);
     cv.medianBlur(gray, denoised, 3);
     clahe.apply(denoised, claheOutput);
-    cv.adaptiveThreshold(
-      claheOutput,
-      thresholded,
-      255,
-      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-      cv.THRESH_BINARY,
-      31,
-      11
-    );
+    // Return normalized grayscale and warped variants, avoiding harsh adaptive binary thresholding
     return Promise.all([
       matToBlob(cv, warped),
       matToBlob(cv, claheOutput),
-      matToBlob(cv, thresholded),
     ]);
   } finally {
     srcPoints.delete();
@@ -192,7 +182,6 @@ function createRectifiedVariants(cv, source, corners) {
     gray.delete();
     denoised.delete();
     claheOutput.delete();
-    thresholded.delete();
     clahe.delete();
   }
 }
@@ -218,29 +207,17 @@ export async function createOpenCvScanVariants(imageData) {
 
     const denoised = new cv.Mat();
     const claheOutput = new cv.Mat();
-    const thresholded = new cv.Mat();
-    const clahe = new cv.CLAHE(2.2, new cv.Size(8, 8));
+    const clahe = new cv.CLAHE(2.0, new cv.Size(8, 8));
     try {
       cv.medianBlur(gray, denoised, 3);
       clahe.apply(denoised, claheOutput);
-      cv.adaptiveThreshold(
-        claheOutput,
-        thresholded,
-        255,
-        cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv.THRESH_BINARY,
-        31,
-        11
-      );
       const globalVariants = await Promise.all([
         matToBlob(cv, claheOutput),
-        matToBlob(cv, thresholded),
       ]);
       return { variants: globalVariants, perspectiveVariants };
     } finally {
       denoised.delete();
       claheOutput.delete();
-      thresholded.delete();
       clahe.delete();
     }
   } finally {

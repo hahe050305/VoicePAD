@@ -2,7 +2,7 @@
 // Dedicated Web Worker for Deep Learning TrOCR + Entity Normalization.
 // Runs off the main browser thread to guarantee ZERO UI freezing.
 
-import { pipeline, env } from "@huggingface/transformers";
+import { pipeline, env, load_image } from "@huggingface/transformers";
 
 // Use browser Cache API / IndexedDB
 env.allowLocalModels = false;
@@ -56,9 +56,16 @@ self.onmessage = async (e) => {
   }
 
   if (type === "RECOGNIZE") {
+    let url = null;
     try {
       const pipe = await getPipeline();
-      const output = await pipe(imageSource);
+      let blob = imageSource;
+      if (!(imageSource instanceof Blob)) {
+        blob = await (await fetch(imageSource)).blob();
+      }
+      url = URL.createObjectURL(blob);
+      const img = await load_image(url);
+      const output = await pipe(img);
       const rawText = (output?.[0]?.generated_text || "").trim();
       const plate = normalizeRegistrationPlate(rawText);
 
@@ -74,6 +81,10 @@ self.onmessage = async (e) => {
         type: "ERROR",
         error: err.message || "OCR worker recognition failed",
       });
+    } finally {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
     }
   }
 };

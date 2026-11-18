@@ -54,7 +54,10 @@ export function prewarmDeepLearningOCR() {
   // Deliberately no-op on initial page load to save 120MB+ RAM until user uploads an image
 }
 
-export async function runDeepOcrInWorker(imageSource, timeoutMs = 10000) {
+export async function runDeepOcrInWorker(imageSource, timeoutMs = 8000) {
+  if (typeof window === "undefined" || typeof Worker === "undefined") {
+    throw new Error("TrOCR worker is only available in browser environments");
+  }
   const worker = getWorker();
   const currentId = ++jobId;
 

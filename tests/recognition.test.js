@@ -3,12 +3,14 @@ import { after, before, test } from "node:test";
 import { createServer } from "vite";
 import { formatPlate, parsePlateString } from "../src/services/plateService.js";
 import { scoreOcrResult } from "../src/services/ocrRanking.js";
+import { scoreCandidateOcr } from "../src/services/tesseractService.js";
 import { detectTextRegions } from "../src/services/ocrRegionDetection.js";
 import { HYPERLOCAL_COCO_TAGS } from "../src/services/visionTags.js";
 
 let server;
 let deriveTags;
 let isPureImageText;
+let sanitizeOcrText;
 
 before(async () => {
   server = await createServer({
@@ -19,7 +21,7 @@ before(async () => {
     logLevel: "silent",
   });
   ({ deriveTags } = await server.ssrLoadModule("/src/tagger.js"));
-  ({ isPureImageText } = await server.ssrLoadModule("/src/ocr.js"));
+  ({ isPureImageText, sanitizeOcrText } = await server.ssrLoadModule("/src/ocr.js"));
 });
 
 after(async () => {
@@ -117,4 +119,26 @@ test("maps detections to specific COCO labels without invented synonyms", () => 
   assert.deepEqual(HYPERLOCAL_COCO_TAGS.person, ["#person", "#people"]);
   assert.equal(HYPERLOCAL_COCO_TAGS.person.includes("#selfie"), false);
   assert.deepEqual(HYPERLOCAL_COCO_TAGS["sports ball"], ["#sports", "#ball"]);
+});
+
+test("sanitizeOcrText strips isolated punctuation and noise", () => {
+  assert.equal(sanitizeOcrText("~ , - . | : ; ' \" ` ^ * + ="), "");
+  assert.equal(sanitizeOcrText("~ . , - Invoice Number 12345 ; : !"), "Invoice Number 12345");
+  assert.equal(sanitizeOcrText("/// \\\\\\ === +++\nValid Document Header"), "Valid Document Header");
+});
+
+test("sanitizeOcrText rejects outputs when overall alphanumeric ratio is < 60%", () => {
+  assert.equal(sanitizeOcrText("a ! @ # $ % ^ & * ( ) _ + ="), "");
+  assert.equal(isPureImageText("a ! @ # $ % ^ & * ( ) _ + ="), true);
+});
+
+test("scoreCandidateOcr penalizes noisy high-symbol strings without rewarding length", () => {
+  const cleanScore = scoreCandidateOcr("KA 01 AB 1234", 85, true);
+  const noisyWallScore = scoreCandidateOcr(
+    "~ . : ; | / \\ _ - + = ! ? @ # $ % ^ & * 1234567890abcdefghijklmnopqrstuvwxyz",
+    35,
+    false
+  );
+  assert.ok(cleanScore > noisyWallScore);
+  assert.ok(noisyWallScore < 0);
 });

@@ -6,10 +6,80 @@ import { parsePlateString } from "./services/plateService.js";
 import { scoreOcrText } from "./services/ocrRanking.js";
 import { createOcrVariants } from "./services/ocrPreprocessService.js";
 import { recognizeWithTesseractEnhancements } from "./services/tesseractService.js";
+import { runDeepOcrInWorker } from "./services/deepOcrService.js";
+
+/**
+ * Post-processing filter for OCR text:
+ * 1. Strips isolated punctuation/symbols that are noise artifacts.
+ * 2. Drops fragmented lines with low alphanumeric ratio or single-symbol noise.
+ * 3. Enforces an overall alphanumeric ratio threshold (>= 60%) unless a verified plate or structured ID is found.
+ */
+export function sanitizeOcrText(rawText) {
+  if (!rawText || typeof rawText !== "string") return "";
+  const trimmed = rawText.trim();
+  if (!trimmed) return "";
+
+  // Check if plate or structured ID is present
+  const plate = parsePlateString(trimmed);
+  const structuredIds = extractStructuredIds(trimmed);
+
+  const lines = trimmed.split(/[\r\n]+/);
+  const cleanedLines = [];
+
+  for (const rawLine of lines) {
+    let line = rawLine.trim();
+    if (!line) continue;
+
+    // Token-based filtering:
+    // Drop tokens that have zero alphanumeric characters (isolated symbols/punctuation)
+    // and strip leading/trailing punctuation from remaining words
+    const words = line.split(/\s+/).filter(Boolean);
+    const validWords = [];
+    for (const w of words) {
+      if (!/[a-zA-Z0-9]/.test(w)) continue;
+      const cleaned = w.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, "");
+      if (cleaned) validWords.push(cleaned);
+    }
+    line = validWords.join(" ");
+
+    if (!line) continue;
+
+    const nonSpaceChars = line.replace(/\s+/g, "");
+    if (!nonSpaceChars.length) continue;
+
+    const alphanumChars = (nonSpaceChars.match(/[a-zA-Z0-9]/g) || []).length;
+    const lineRatio = alphanumChars / nonSpaceChars.length;
+
+    // Drop line if alphanumeric content is less than 50%
+    if (lineRatio < 0.5) continue;
+
+    // Drop single-char noise lines unless it's part of a detected structured ID or plate
+    if (alphanumChars < 2 && !plate && structuredIds.length === 0) continue;
+
+    cleanedLines.push(line);
+  }
+
+  const resultText = cleanedLines.join("\n").trim();
+  if (!resultText) {
+    return plate ? `Vehicle Plate: ${plate}` : "";
+  }
+
+  const totalNonSpace = resultText.replace(/\s+/g, "");
+  const totalAlphanum = (totalNonSpace.match(/[a-zA-Z0-9]/g) || []).length;
+  const overallRatio = totalNonSpace.length > 0 ? totalAlphanum / totalNonSpace.length : 0;
+
+  // Treat outputs as empty if alphanumeric ratio is below 60% (and no plate/ID present)
+  if (overallRatio < 0.60 && !plate && structuredIds.length === 0) {
+    return "";
+  }
+
+  return resultText;
+}
 
 export function isPureImageText(text) {
   if (!text || !text.trim()) return true;
-  const clean = text.trim();
+  const clean = sanitizeOcrText(text);
+  if (!clean || !clean.trim()) return true;
   if (extractVehiclePlate(clean) || extractStructuredIds(clean).length > 0) return false;
 
   const words = clean.split(/\s+/).filter((w) => /^[a-zA-Z]{3,}$/.test(w));
@@ -176,8 +246,9 @@ async function recognizeWithNativeEnhancements(file) {
 }
 
 /**
- * 2. Web / Browser Dev Fallback:
- * Uses browser native Shape Detection API (window.TextDetector) or a Tesseract worker pass.
+ * 2. Web / Browser Dev Mode:
+ * Uses browser native Shape Detection API (window.TextDetector),
+ * modern TrOCR deep learning worker, or enhanced Tesseract fallback.
  */
 async function recognizeWithWeb(file, onProgress) {
   let nativeText = "";
@@ -189,13 +260,31 @@ async function recognizeWithWeb(file, onProgress) {
       const detections = await detector.detect(bitmap);
       nativeText = (detections || []).map((d) => d.rawValue || "").join("\n").trim();
     } catch (error) {
-      console.warn("[OCR] Browser text detection failed; trying Tesseract:", error);
+      console.warn("[OCR] Browser text detection failed; trying TrOCR / Tesseract:", error);
     } finally {
       bitmap?.close();
     }
   }
 
-  // Tesseract compares the original with contrast and adaptive-threshold variants.
+  if (nativeText && nativeText.length > 5) {
+    return { text: nativeText, confidence: 90 };
+  }
+
+  // 1. Attempt TrOCR deep-learning model in dedicated web worker
+  try {
+    const deepResult = await runDeepOcrInWorker(file, 8000);
+    const deepText = deepResult?.rawText?.trim() || "";
+    if (deepText) {
+      return {
+        text: deepText,
+        confidence: 85,
+      };
+    }
+  } catch (deepErr) {
+    console.warn("[OCR] TrOCR worker pass unavailable; falling back to Tesseract:", deepErr?.message || deepErr);
+  }
+
+  // 2. High-speed Tesseract fallback with antialiased enhancements
   const ret = await recognizeWithTesseractEnhancements(file, { plate: false, onProgress }).catch((error) => {
     console.warn("[OCR] Tesseract recognition failed:", error);
     return null;
@@ -233,7 +322,7 @@ export async function recognizeVehiclePlate(file, onProgress) {
 
 /**
  * High-performance, on-device OCR pipeline:
- * Automatically routes to native Google ML Kit on mobile or browser engine in development.
+ * Automatically routes to native Google ML Kit on mobile or modern TrOCR/Tesseract on web.
  */
 let ocrQueue = Promise.resolve();
 
@@ -263,10 +352,13 @@ async function _performOCR(file, onProgress) {
   const plateRecognition = await recognizePlateCandidate(file, result.text, onProgress);
   const recognizedText = plateRecognition.text;
   const confidence = result.confidence;
-  const plate = extractVehiclePlate(recognizedText);
-  const structuredIds = extractStructuredIds(recognizedText);
 
-  const cleanDisplayText = recognizedText.trim();
+  // Apply OCR post-processing filter to strip punctuation noise, speckles, and low-alphanumeric text
+  const sanitizedText = sanitizeOcrText(recognizedText);
+  const plate = extractVehiclePlate(sanitizedText) || extractVehiclePlate(recognizedText);
+  const structuredIds = extractStructuredIds(sanitizedText);
+
+  const cleanDisplayText = sanitizedText.trim();
   const displayText = plate && !cleanDisplayText.includes(plate)
     ? `Vehicle Plate: ${plate}\n${cleanDisplayText}`.trim()
     : cleanDisplayText;
@@ -274,7 +366,7 @@ async function _performOCR(file, onProgress) {
   return {
     text: displayText,
     rawText: recognizedText,
-    isPureImage: isPureImageText(recognizedText),
+    isPureImage: isPureImageText(displayText),
     confidence,
     plate,
     plateOcrAttempted: plateRecognition.attempted,
