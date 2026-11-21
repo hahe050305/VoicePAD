@@ -84,10 +84,25 @@ const [filteredEntries, setFilteredEntries] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
-const [moonshineStatus, setMoonshineStatus] = useState({ state: "idle", progress: null, error: null, });
-const [visionModelStatus, setVisionModelStatus] = useState({ state: "idle", progress: null, error: null, });
+  const [moonshineStatus, setMoonshineStatus] = useState({ state: "idle", progress: null, error: null });
+  const [visionModelStatus, setVisionModelStatus] = useState({ state: "idle", progress: null, error: null });
+  const [showAiReadyBadge, setShowAiReadyBadge] = useState(false);
   const [manualNote, setManualNote] = useState("");
   const [autoTags, setAutoTags] = useState([]);
+  const prevLoadingRef = useRef(false);
+
+  const isVisionLoading = visionModelStatus.state === "loading";
+  const isMoonshineLoading = moonshineStatus.state === "loading";
+  const isAnyModelLoading = isVisionLoading || isMoonshineLoading;
+
+  useEffect(() => {
+    if (prevLoadingRef.current && !isAnyModelLoading && (visionModelStatus.state === "ready" || moonshineStatus.state === "ready")) {
+      setShowAiReadyBadge(true);
+      const timer = setTimeout(() => setShowAiReadyBadge(false), 3500);
+      return () => clearTimeout(timer);
+    }
+    prevLoadingRef.current = isAnyModelLoading;
+  }, [isAnyModelLoading, visionModelStatus.state, moonshineStatus.state]);
 
   // In-card editing state
   const [editingId, setEditingId] = useState(null);
@@ -271,8 +286,8 @@ const loadEntries = useCallback(async () => { await seedDemoData();
       .catch((err) => console.error("Failed to load memories:", err));
     const unsubscribeVisionStatus = subscribeVisionModelStatus(setVisionModelStatus);
 
-// Warm one model at a time during idle periods. Concurrent model downloads and
-// inference can contend for memory/CPU on phones even though work is in workers.
+// Start CLIP warmup as soon as the app mounts so its category embeddings are
+// ready for image tagging. Keep OCR deferred to an idle period to limit contention.
 const waitForIdle = () => new Promise((resolve) => {
   if (typeof window.requestIdleCallback === "function") {
     window.requestIdleCallback(resolve, { timeout: 2500 });
@@ -281,7 +296,6 @@ const waitForIdle = () => new Promise((resolve) => {
   }
 });
 void (async () => {
-  await waitForIdle();
   await prewarmVisionModel();
   await waitForIdle();
   await prewarmOCR();
@@ -1300,6 +1314,32 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
     </div>
   </div>
   <div className="flex items-center gap-2">
+    {isAnyModelLoading ? (
+      <div
+        className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-[10px] font-medium animate-pulse"
+        title={visionModelStatus.progress != null ? `Preparing on-device AI (${visionModelStatus.progress}%)` : "Preparing on-device AI in background"}
+      >
+        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping shrink-0" />
+        <span className="tracking-tight">
+          {visionModelStatus.progress != null && visionModelStatus.progress > 0
+            ? `AI Vision ${visionModelStatus.progress}%`
+            : "AI Readying..."}
+        </span>
+      </div>
+    ) : showAiReadyBadge ? (
+      <div
+        className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-[10px] font-medium animate-in fade-in zoom-in-95 duration-200"
+        title="On-device AI active"
+      >
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] shrink-0" />
+        <span className="tracking-tight">On-Device AI Active</span>
+      </div>
+    ) : (
+      <span
+        className="w-2 h-2 rounded-full bg-emerald-400/80 shadow-[0_0_8px_rgba(52,211,153,0.6)]"
+        title="On-device AI active"
+      />
+    )}
     <button
       type="button"
       onClick={() => setShowOnboarding(true)}
@@ -1309,7 +1349,6 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
     >
       ?
     </button>
-    <span className="w-2 h-2 rounded-full bg-emerald-400/80 shadow-[0_0_8px_rgba(52,211,153,0.6)]" />
   </div>
 </header>
 
