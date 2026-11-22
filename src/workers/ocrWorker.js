@@ -4,9 +4,16 @@
 
 import { pipeline, env, load_image } from "@huggingface/transformers";
 
-// Use browser Cache API / IndexedDB
+// Use browser Cache API / IndexedDB — always try to cache so model is only
+// downloaded once. allowLocalModels stays false (we always pull from HuggingFace Hub).
 env.allowLocalModels = false;
+env.allowRemoteModels = true;
 env.useBrowserCache = true;
+try {
+  env.useWasmCache = typeof caches !== "undefined" && typeof caches.open === "function";
+} catch {
+  env.useWasmCache = false;
+}
 
 let ocrPipeline = null;
 

@@ -14,6 +14,11 @@ async function getTranscriber() {
     pipelinePromise = (async () => {
       const { pipeline, env } = await import("@huggingface/transformers");
 
+      // Always persist downloaded model files so they are only fetched once.
+      // The Cache API is available in Capacitor's WebView (capacitor://localhost),
+      // so we unconditionally enable both caches. If the Cache API is somehow
+      // unavailable we fall back gracefully — the model will re-download that
+      // session but will work correctly.
       let isCacheAvailable = false;
       try {
         isCacheAvailable = typeof caches !== "undefined" && typeof caches.open === "function";
@@ -21,7 +26,7 @@ async function getTranscriber() {
         isCacheAvailable = false;
       }
 
-      env.useBrowserCache = isCacheAvailable;
+      env.useBrowserCache = true;        // always try Cache API
       env.useWasmCache = isCacheAvailable;
       env.allowLocalModels = false;
       env.allowRemoteModels = true;

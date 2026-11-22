@@ -26,6 +26,9 @@ function resetIdleTimer(worker) {
 export async function getTesseractWorker() {
   if (!workerPromise) {
     workerPromise = createWorker("eng", 1, {
+      // Load eng.traineddata from the app's own bundle (public/eng.traineddata)
+      // so it works fully offline — no CDN fetch needed after the first install.
+      langPath: "/",
       logger: (message) => {
         if (message.status === "recognizing text" && activeProgress) {
           activeProgress(Math.round((message.progress || 0) * 100));
