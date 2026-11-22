@@ -6,7 +6,6 @@ import { parsePlateString } from "./services/plateService.js";
 import { scoreOcrText } from "./services/ocrRanking.js";
 import { createOcrVariants } from "./services/ocrPreprocessService.js";
 import { recognizeWithTesseractEnhancements } from "./services/tesseractService.js";
-import { runDeepOcrInWorker } from "./services/deepOcrService.js";
 
 /**
  * Post-processing filter for OCR text:
@@ -279,7 +278,7 @@ async function recognizeWithWeb(file, onProgress) {
       const detections = await detector.detect(bitmap);
       nativeText = (detections || []).map((d) => d.rawValue || "").join("\n").trim();
     } catch (error) {
-      console.warn("[OCR] Browser text detection failed; trying TrOCR / Tesseract:", error);
+      console.warn("[OCR] Browser text detection failed; falling back to Tesseract:", error);
     } finally {
       bitmap?.close();
     }
@@ -289,21 +288,7 @@ async function recognizeWithWeb(file, onProgress) {
     return { text: nativeText, confidence: 90 };
   }
 
-  // 1. Attempt TrOCR deep-learning model in dedicated web worker
-  try {
-    const deepResult = await runDeepOcrInWorker(file, 8000);
-    const deepText = deepResult?.rawText?.trim() || "";
-    if (deepText) {
-      return {
-        text: deepText,
-        confidence: 85,
-      };
-    }
-  } catch (deepErr) {
-    console.warn("[OCR] TrOCR worker pass unavailable; falling back to Tesseract:", deepErr?.message || deepErr);
-  }
-
-  // 2. High-speed Tesseract fallback with antialiased enhancements
+  // High-speed Tesseract recognition with antialiased enhancements
   const ret = await recognizeWithTesseractEnhancements(file, { plate: false, onProgress }).catch((error) => {
     console.warn("[OCR] Tesseract recognition failed:", error);
     return null;
