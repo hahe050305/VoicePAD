@@ -1604,7 +1604,7 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
       >
         <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+            <div className="w-full mb-1">
               {quickLabelingId === entry.id ? (
                 <div
                   className="flex items-center gap-1.5 my-0.5"
@@ -1652,37 +1652,37 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
                   </button>
                 </div>
               ) : (
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {entry.label ? (
-                    <span className="text-[10px] font-medium px-2.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setQuickLabelingId(entry.id);
-                          setQuickLabelInput(entry.label);
-                        }}
-                        className="hover:underline flex items-center gap-1 text-indigo-300 text-left"
-                        title="Click to edit label"
-                      >
-                        <span>🏷️</span>
-                        <span>{entry.label}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setQuickLabelingId(entry.id);
-                          setQuickLabelInput(entry.label);
-                        }}
-                        className="text-[9px] px-1 py-0.5 rounded bg-white/[0.08] hover:bg-white/[0.15] text-slate-300 hover:text-white transition"
-                        title="Edit label"
-                      >
-                        Edit
-                      </button>
-                    </span>
-                  ) : entry.type === "image" ? (
-                    <>
+                <div className="flex items-center justify-between w-full gap-2">
+                  <div className="flex items-center gap-1.5">
+                    {entry.label ? (
+                      <span className="text-[10px] font-medium px-2.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setQuickLabelingId(entry.id);
+                            setQuickLabelInput(entry.label);
+                          }}
+                          className="hover:underline flex items-center gap-1 text-indigo-300 text-left"
+                          title="Click to edit label"
+                        >
+                          <span>🏷️</span>
+                          <span>{entry.label}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setQuickLabelingId(entry.id);
+                            setQuickLabelInput(entry.label);
+                          }}
+                          className="text-[9px] px-1 py-0.5 rounded bg-white/[0.08] hover:bg-white/[0.15] text-slate-300 hover:text-white transition"
+                          title="Edit label"
+                        >
+                          Edit
+                        </button>
+                      </span>
+                    ) : entry.type === "image" ? (
                       <button
                         type="button"
                         onClick={(e) => {
@@ -1690,30 +1690,19 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
                           setQuickLabelingId(entry.id);
                           setQuickLabelInput("");
                         }}
-                        className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 transition"
+                        className="text-[10px] font-medium px-2.5 py-0.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 hover:text-white transition"
                         title="Add label"
                       >
                         + Label
                       </button>
-                      <button
-                        type="button"
-                        onClick={(e) => handleStartVoiceLabel(entry, e)}
-                        className={`text-[10px] font-medium px-2 py-0.5 rounded-full border transition flex items-center gap-1 ${
-                          recordingCardId === entry.id
-                            ? "bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse"
-                            : "bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 border-white/[0.08]"
-                        }`}
-                      >
-                        🎤 {recordingCardId === entry.id ? "Listening..." : "Voice Note"}
-                      </button>
-                    </>
-                  ) : null}
+                    ) : null}
+                  </div>
 
                   {entry.type === "image" && entry.ocr?.trim() && (
                     <button
                       type="button"
                       onClick={(e) => toggleOcrRevealed(entry.id, e)}
-                      className={`text-[10px] font-medium px-2 py-0.5 rounded-full border transition flex items-center gap-1 ${
+                      className={`text-[10px] font-medium px-2 py-0.5 rounded-full border transition flex items-center gap-1 shrink-0 ${
                         revealedOcrIds.has(entry.id)
                           ? "bg-indigo-500/20 text-indigo-300 border-indigo-500/40"
                           : "bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 border-white/[0.08]"
@@ -1844,19 +1833,6 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
                         <p className="text-[11px] text-slate-300 font-medium flex items-center gap-1">
                           <span>✨</span> What's inside or hidden?
                         </p>
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={(e) => handleStartVoiceLabel(entry, e)}
-                            className={`text-[10px] font-medium px-2 py-0.5 rounded-full border transition flex items-center gap-1 ${
-                              recordingCardId === entry.id
-                                ? "bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse"
-                                : "bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 border-white/[0.08]"
-                            }`}
-                          >
-                            🎤 {recordingCardId === entry.id ? "Listening..." : "Voice"}
-                          </button>
-                        </div>
                       </div>
 
                       <div className="flex items-center gap-1.5 flex-wrap">

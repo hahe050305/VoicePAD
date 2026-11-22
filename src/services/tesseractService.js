@@ -60,7 +60,7 @@ export function prewarmOCR(delay = 0) {
 /** Serialize requests because Tesseract's whitelist and page mode are worker-wide settings. */
 export function recognizeWithTesseract(image, {
   plate = false,
-  pageSegmentationMode = "6",
+  pageSegmentationMode = plate ? "6" : "11",
   onProgress,
 } = {}) {
   const task = queue.then(async () => {
@@ -249,11 +249,15 @@ export function scoreCandidateOcr(text, confidence, hasPlate) {
 
   // Heavily penalize high-symbol ratio and low confidence
   const symbolPenalty = (1 - alphanumRatio) * 80 + symbolCount * 2;
-  const lowConfPenalty = confidence < 60 ? (60 - confidence) * 2 : 0;
+  const lowConfPenalty = confidence < 50 ? (50 - confidence) * 2 : 0;
 
-  // Reward plate presence, high confidence, and clean alphanumeric ratio
-  // Notice: "+ text.length" is completely removed so hallucinated long noise is not favored
-  const baseScore = (confidence * 0.8) + (alphanumRatio * 20);
+  // Reward plate presence, high confidence, clean alphanumeric ratio,
+  // and give healthy weight to capturing meaningful text length (up to 40 words)
+  // so full-document text is not discarded in favor of a 1-word heading snippet.
+  const wordCount = clean.split(/\s+/).filter((w) => w.length >= 2).length;
+  const lengthBonus = Math.min(wordCount, 40) * 1.5;
+
+  const baseScore = (confidence * 0.6) + (alphanumRatio * 20) + lengthBonus;
   const plateBonus = hasPlate ? 200 : 0;
 
   return baseScore + plateBonus - symbolPenalty - lowConfPenalty;
@@ -296,31 +300,34 @@ export async function recognizeWithTesseractEnhancements(image, options = {}) {
     }
   };
 
-  // PASS 0: If targeted plate candidate crop was detected, test it with PSM 6
-  if (variants.plateCrop) {
-    const platePass = await testPass(variants.plateCrop, "6");
-    if (platePass?.hasPlate || (options.plate && (platePass?.score || 0) >= 50)) {
-      return platePass.result;
+  // Targeted vehicle plate pipeline
+  if (options.plate) {
+    if (variants.plateCrop) {
+      const platePass = await testPass(variants.plateCrop, "6");
+      if (platePass?.hasPlate || (platePass?.score || 0) >= 50) return platePass.result;
     }
+    const cropPass = await testPass(variants.crop, "6");
+    if (cropPass?.hasPlate || (cropPass?.score || 0) >= 60) return cropPass.result;
+
+    const contrastPass = await testPass(variants.contrast, "6");
+    if (contrastPass?.hasPlate) return contrastPass.result;
+
+    const basePass = await testPass(variants.baseline, "6");
+    return basePass?.result || bestResult || { data: { text: "", confidence: 0 } };
   }
 
-  // PASS 1: Focused center crop (catches vehicle plates and centered cards without background gravel)
-  const pass1 = await testPass(variants.crop, "6");
-  if (pass1?.hasPlate || (!options.plate && (pass1?.score || 0) >= 70)) {
-    return pass1.result;
+  // General text pipeline (Receipts, cards, signs, labels, packages):
+  // Use PSM 11 (Sparse text) across full-resolution baseline image
+  const baselinePass = await testPass(variants.baseline, "11");
+  if (baselinePass && baselinePass.score >= 50) {
+    return baselinePass.result;
   }
 
-  // PASS 2: Contrast-enhanced image (use PSM 6 for plates, PSM 11 for sparse documents)
-  const pass2 = await testPass(variants.contrast, options.plate ? "6" : "11");
-  if (pass2?.hasPlate || (!options.plate && (pass2?.score || 0) >= 70)) {
-    return pass2.result;
+  // If baseline had poor lighting/contrast, fall back to contrast-enhanced variant
+  const contrastPass = await testPass(variants.contrast, "11");
+  if (contrastPass && contrastPass.score > (baselinePass?.score || -1)) {
+    return contrastPass.result;
   }
 
-  // PASS 3: Baseline image
-  const pass3 = await testPass(variants.baseline, "6");
-  if (pass3?.hasPlate) {
-    return pass3.result;
-  }
-
-  return bestResult || pass1?.result || { data: { text: "", confidence: 0 } };
+  return bestResult || baselinePass?.result || { data: { text: "", confidence: 0 } };
 }

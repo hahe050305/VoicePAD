@@ -57,8 +57,9 @@ export function sanitizeOcrText(rawText) {
     if (lineRatio < 0.5) continue;
 
     // Filter texture hallucination noise (e.g. "Pa re iy", "3 FN ps i Ee A Ny 33 SS", "ws AEN a NE Bc")
-    const lineWords = line.split(/\s+/).filter(Boolean);
-    if (lineWords.length >= 2 && structuredIds.length === 0) {
+    // Keep lines with numbers (dates, prices, ID groups, room/bay numbers) safe from short-word dropping.
+    const hasDigits = /\d/.test(line);
+    if (!hasDigits && lineWords.length >= 2 && structuredIds.length === 0) {
       const shortWordCount = lineWords.filter((w) => w.length <= 2).length;
       const shortWordRatio = shortWordCount / lineWords.length;
       const avgWordLength = nonSpaceChars.length / lineWords.length;
@@ -67,7 +68,7 @@ export function sanitizeOcrText(rawText) {
       if (shortWordRatio >= 0.65 || avgWordLength < 2.5) {
         continue;
       }
-    } else if (lineWords.length === 1 && structuredIds.length === 0) {
+    } else if (!hasDigits && lineWords.length === 1 && structuredIds.length === 0) {
       // Single word of <= 2 characters is noise
       if (lineWords[0].length <= 2) {
         continue;
