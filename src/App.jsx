@@ -943,17 +943,21 @@ const extractTagsFromText = (text) => { if (!text || !text.trim()) return ["#ima
       setAllEntries(sorted);
       setFilteredEntries(sorted.slice(0, 20));
 
-      // Run OCR & CLIP Vector Embedding silently in background
+      // Run OCR & CLIP Vector Embedding silently in background with staged pacing
       const processingTask = (async () => {
+        // Yield to allow the browser to paint the new card and render the immediate image
+        await new Promise((resolve) => setTimeout(resolve, 60));
+
         for (let i = 0; i < newEntries.length; i++) {
           const entry = newEntries[i];
           const file = entry.imageBlob;
           if (!file) continue;
 
           try {
-            console.log(`[Vision] Embedding image ${i + 1}/${newEntries.length}...`);
+            console.log(`[Vision] Processing image ${i + 1}/${newEntries.length}...`);
 
-            const optimizePromise = prepareImageForStorage(file)
+            // 1. Optimize thumbnail & storage first so card has lightweight asset
+            await prepareImageForStorage(file)
               .then(async ({ optimizedBlob, thumbnailBlob }) => {
                 const patch = { imageBlob: optimizedBlob };
                 if (thumbnailBlob && thumbnailBlob !== file) {
@@ -1004,68 +1008,63 @@ const extractTagsFromText = (text) => { if (!text || !text.trim()) return ["#ima
             let currentOcrText = "";
             let currentPlate = null;
 
-            // Run OCR (Tesseract worker) and CLIP embedding (Vision worker) concurrently
-            const ocrPromise = (async () => {
-              try {
-                const ocrResult = await performOCR(file);
-                const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
-                currentPlate = typeof ocrResult === "object" && ocrResult?.plate ? ocrResult.plate : null;
-                const structuredIds = typeof ocrResult === "object" && Array.isArray(ocrResult?.structuredIds) ? ocrResult.structuredIds : [];
-                const cleanText = extractedText.trim();
-                currentOcrText = currentPlate && !cleanText.includes(currentPlate)
-                  ? `${currentPlate}\n${cleanText}`.trim()
-                  : cleanText;
+            // 2. Run OCR (Native ML Kit on mobile or Web OCR on browser)
+            try {
+              const ocrResult = await performOCR(file);
+              const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
+              currentPlate = typeof ocrResult === "object" && ocrResult?.plate ? ocrResult.plate : null;
+              const structuredIds = typeof ocrResult === "object" && Array.isArray(ocrResult?.structuredIds) ? ocrResult.structuredIds : [];
+              const cleanText = extractedText.trim();
+              currentOcrText = currentPlate && !cleanText.includes(currentPlate)
+                ? `${currentPlate}\n${cleanText}`.trim()
+                : cleanText;
 
-                const textTags = cleanText ? deriveTags(cleanText) : [];
-                const idTags = structuredIds.map((id) => `#${id.value.toLowerCase()}`);
-                const plateTags = currentPlate ? ["#vehicle", `#${currentPlate.replace(/\s+/g, "").toLowerCase()}`] : [];
-                const docTags = structuredIds.length > 0 ? ["#document"] : [];
+              const textTags = cleanText ? deriveTags(cleanText) : [];
+              const idTags = structuredIds.map((id) => `#${id.value.toLowerCase()}`);
+              const plateTags = currentPlate ? ["#vehicle", `#${currentPlate.replace(/\s+/g, "").toLowerCase()}`] : [];
+              const docTags = structuredIds.length > 0 ? ["#document"] : [];
 
-                const ocrTags = Array.from(new Set([
-                  ...textTags,
-                  ...plateTags,
-                  ...docTags,
-                  ...idTags,
-                  "#photo",
-                ])).filter(isValidTag);
+              const ocrTags = Array.from(new Set([
+                ...textTags,
+                ...plateTags,
+                ...docTags,
+                ...idTags,
+                "#photo",
+              ])).filter(isValidTag);
 
-                // Update the UI card immediately with OCR results as soon as ready
-                await syncCard({
-                  ocr: currentOcrText,
-                  isPureImage: !currentPlate && structuredIds.length === 0 && (currentOcrText.length === 0 || isPureImageText(currentOcrText)),
-                  tags: ocrTags.length > 0 ? ocrTags : ["#photo"],
-                });
-              } catch (ocrErr) {
-                console.warn("[Vision] OCR detection pass failed:", ocrErr);
+              // Update the UI card immediately with OCR results as soon as ready
+              await syncCard({
+                ocr: currentOcrText,
+                isPureImage: !currentPlate && structuredIds.length === 0 && (currentOcrText.length === 0 || isPureImageText(currentOcrText)),
+                tags: ocrTags.length > 0 ? ocrTags : ["#photo"],
+              });
+            } catch (ocrErr) {
+              console.warn("[Vision] OCR detection pass failed:", ocrErr);
+            }
+
+            // 3. Run CLIP vector embedding sequentially to keep mobile CPU responsive
+            try {
+              const embedResult = await embedImage(file);
+              const embedding = Array.isArray(embedResult)
+                ? embedResult
+                : embedResult?.embedding;
+              const visualTags = Array.isArray(embedResult?.visualTags)
+                ? embedResult.visualTags
+                : [];
+
+              const patch = {};
+              if (embedding && Array.isArray(embedding)) {
+                patch.embedding = embedding;
               }
-            })();
-
-            const embedPromise = (async () => {
-              try {
-                const embedResult = await embedImage(file);
-                const embedding = Array.isArray(embedResult)
-                  ? embedResult
-                  : embedResult?.embedding;
-                const visualTags = Array.isArray(embedResult?.visualTags)
-                  ? embedResult.visualTags
-                  : [];
-
-                const patch = {};
-                if (embedding && Array.isArray(embedding)) {
-                  patch.embedding = embedding;
-                }
-                if (visualTags.length > 0) {
-                  patch.tags = visualTags;
-                }
-                if (Object.keys(patch).length > 0) {
-                  await syncCard(patch);
-                }
-              } catch (embedErr) {
-                console.warn("[Vision] CLIP embedding pass failed:", embedErr);
+              if (visualTags.length > 0) {
+                patch.tags = visualTags;
               }
-            })();
-
-            await Promise.all([ocrPromise, embedPromise, optimizePromise]);
+              if (Object.keys(patch).length > 0) {
+                await syncCard(patch);
+              }
+            } catch (embedErr) {
+              console.warn("[Vision] CLIP embedding pass failed:", embedErr);
+            }
 
             // Low-confidence check: Did CLIP / OCR fail to classify or find a specific object?
             const updatedRecord = await db.images.get(entry.id);
@@ -1777,9 +1776,8 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
                     <img
                       src={entry.thumbnailUrl}
                       alt={entry.label || "Memory photo"}
-                      loading="lazy"
-                      decoding="async"
-                      fetchPriority="low"
+                      loading="eager"
+                      decoding="auto"
                       className="max-h-72 max-w-full object-contain rounded-xl"
                     />
                   ) : (
@@ -2181,7 +2179,7 @@ return (
             src={selectedImage.url}
             alt={modalEntry.label || "Memory photo"}
             loading="eager"
-            decoding="async"
+            decoding="auto"
             className="max-h-[68vh] w-full object-contain rounded-xl"
           />
         ) : (

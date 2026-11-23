@@ -19,7 +19,11 @@ export async function capturePhotoNativeOrWeb(fallbackFileInputRef = null) {
       });
       if (photo?.webPath) {
         const res = await fetch(photo.webPath);
-        return await res.blob();
+        const blob = await res.blob();
+        const mimeType = photo.format ? `image/${photo.format}` : "image/jpeg";
+        return blob.type && blob.type.startsWith("image/")
+          ? blob
+          : new Blob([blob], { type: mimeType });
       }
       return null;
     } catch (err) {

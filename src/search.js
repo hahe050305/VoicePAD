@@ -170,7 +170,13 @@ export function getImageThumbnailUrl(imageId, thumbnailBlob) {
 export function setImageThumbnailUrl(imageId, url) {
   const previousUrl = imageThumbnailUrls.get(imageId);
   if (previousUrl && previousUrl !== url && previousUrl.startsWith("blob:")) {
-    URL.revokeObjectURL(previousUrl);
+    // Delay revocation by 4 seconds so the browser can finish painting the new thumbnail
+    // before the old blob URL is invalidated, avoiding broken image fallbacks ("Memory photo").
+    setTimeout(() => {
+      try {
+        URL.revokeObjectURL(previousUrl);
+      } catch {}
+    }, 4000);
   }
   imageThumbnailUrls.set(imageId, url);
 }
@@ -182,13 +188,15 @@ export async function refreshCache() {
   await db.images.each((image) => {
     liveImageIds.add(image.id);
     const metadata = { ...image };
-    const thumbnailBlob = metadata.thumbnailBlob;
+    const rawThumb = metadata.thumbnailBlob || metadata.imageBlob;
     delete metadata.imageBlob;
     delete metadata.blobUrl;
     delete metadata.thumbnailBlob;
     let thumbnailUrl;
-    if (thumbnailBlob instanceof Blob) {
-      thumbnailUrl = getImageThumbnailUrl(image.id, thumbnailBlob);
+    const isBlobLike = rawThumb instanceof Blob || (rawThumb && typeof rawThumb === "object" && "size" in rawThumb);
+    if (isBlobLike) {
+      const blob = rawThumb instanceof Blob ? rawThumb : new Blob([rawThumb], { type: "image/jpeg" });
+      thumbnailUrl = getImageThumbnailUrl(image.id, blob);
     } else if (imageThumbnailUrls.has(image.id)) {
       thumbnailUrl = imageThumbnailUrls.get(image.id);
     }
@@ -197,7 +205,9 @@ export async function refreshCache() {
 
   for (const [id, url] of imageThumbnailUrls) {
     if (!liveImageIds.has(id)) {
-      URL.revokeObjectURL(url);
+      try {
+        URL.revokeObjectURL(url);
+      } catch {}
       imageThumbnailUrls.delete(id);
     }
   }
@@ -211,7 +221,11 @@ export async function getImageSource(imageId) {
   const image = await db.images.get(imageId);
   if (!image) throw new Error("Image was not found in storage.");
   if (image.imageBlob instanceof Blob) return URL.createObjectURL(image.imageBlob);
-  if (typeof image.blobUrl === "string" && image.blobUrl.startsWith("data:")) return image.blobUrl;
+  if (image.thumbnailBlob instanceof Blob) return URL.createObjectURL(image.thumbnailBlob);
+  if (image.imageBlob && typeof image.imageBlob === "object" && "size" in image.imageBlob) {
+    return URL.createObjectURL(new Blob([image.imageBlob], { type: "image/jpeg" }));
+  }
+  if (typeof image.blobUrl === "string" && (image.blobUrl.startsWith("data:") || image.blobUrl.startsWith("blob:"))) return image.blobUrl;
   throw new Error("Image data is unavailable.");
 }
 

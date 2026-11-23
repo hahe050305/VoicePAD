@@ -36,9 +36,9 @@ export function sanitizeOcrText(rawText) {
     // Token-based filtering:
     // Drop tokens that have zero alphanumeric characters (isolated symbols/punctuation)
     // and strip leading/trailing punctuation from remaining words
-    const lineWords = line.split(/\s+/).filter(Boolean);
+    const rawWords = line.split(/\s+/).filter(Boolean);
     const validWords = [];
-    for (const w of lineWords) {
+    for (const w of rawWords) {
       if (!/[a-zA-Z0-9]/.test(w)) continue;
       const cleaned = w.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, "");
       if (cleaned) validWords.push(cleaned);
@@ -47,6 +47,7 @@ export function sanitizeOcrText(rawText) {
 
     if (!line) continue;
 
+    const lineWords = validWords;
     const nonSpaceChars = line.replace(/\s+/g, "");
     if (!nonSpaceChars.length) continue;
 
@@ -57,9 +58,7 @@ export function sanitizeOcrText(rawText) {
     if (lineRatio < 0.5) continue;
 
     // Filter texture hallucination noise (e.g. "Pa re iy", "3 FN ps i Ee A Ny 33 SS", "ws AEN a NE Bc")
-    // Keep lines with numbers (dates, prices, ID groups, room/bay numbers) safe from short-word dropping.
-    const hasDigits = /\d/.test(line);
-    if (!hasDigits && lineWords.length >= 2 && structuredIds.length === 0) {
+    if (lineWords.length >= 2 && structuredIds.length === 0) {
       const shortWordCount = lineWords.filter((w) => w.length <= 2).length;
       const shortWordRatio = shortWordCount / lineWords.length;
       const avgWordLength = nonSpaceChars.length / lineWords.length;
@@ -68,7 +67,7 @@ export function sanitizeOcrText(rawText) {
       if (shortWordRatio >= 0.65 || avgWordLength < 2.5) {
         continue;
       }
-    } else if (!hasDigits && lineWords.length === 1 && structuredIds.length === 0) {
+    } else if (lineWords.length === 1 && structuredIds.length === 0) {
       // Single word of <= 2 characters is noise
       if (lineWords[0].length <= 2) {
         continue;
@@ -227,41 +226,28 @@ async function recognizeWithNativeMLKit(file) {
 }
 
 async function recognizeWithNativeEnhancements(file) {
-  let processed = {
-    baseline: null,
-    variants: [],
-    perspectiveVariants: [],
-    focusedRegions: [],
-    rotated: [],
-  };
+  // Direct single native ML Kit pass - high speed, zero IPC bloat
   try {
-    processed = await createOcrVariants(file);
-  } catch (error) {
-    console.warn("[OCR] Native image enhancement unavailable; using original:", error);
+    const directResult = await recognizeWithNativeMLKit(file);
+    if (directResult?.text && directResult.text.trim().length > 0) {
+      return directResult;
+    }
+  } catch (err) {
+    console.warn("[OCR] Direct Native ML Kit pass failed, trying enhanced variant:", err);
   }
 
-  let bestResult = null;
-  let bestScore = -1;
-  const candidates = [
-    processed.baseline || file,
-    ...processed.perspectiveVariants,
-    ...processed.variants,
-    ...processed.focusedRegions,
-  ].slice(0, 5);
-  for (const candidate of candidates) {
-    try {
-      const result = await recognizeWithNativeMLKit(candidate);
-      const score = scoreOcrText(result.text);
-      if (score > bestScore) {
-        bestResult = result;
-        bestScore = score;
-      }
-    } catch (error) {
-      console.warn("[OCR] Native ML Kit pass failed; continuing with other variants:", error);
+  // Fallback to single enhanced scan if direct pass yielded nothing
+  try {
+    const processed = await createOcrVariants(file);
+    const candidate = processed.baseline || processed.variants?.[0];
+    if (candidate) {
+      return await recognizeWithNativeMLKit(candidate);
     }
+  } catch (error) {
+    console.warn("[OCR] Native image enhancement unavailable:", error);
   }
-  if (bestResult) return bestResult;
-  throw new Error("All native OCR passes failed.");
+
+  return { text: "", confidence: 0 };
 }
 
 /**
@@ -360,9 +346,9 @@ async function _performOCR(file, onProgress) {
   // 1. Check if primary pass recognized a vehicle plate directly
   let plate = extractVehiclePlate(recognizedText);
 
-  // 2. If no plate found from primary full-frame pass, run targeted plate pass
-  // with plate character whitelist and plate-focused candidate crops
-  if (!plate) {
+  // 2. If no plate found from primary full-frame pass, run targeted plate pass ONLY
+  // if plate-like character patterns are present (avoiding massive multi-pass Tesseract slowdowns on normal photos)
+  if (!plate && hasPlateLikeText(recognizedText)) {
     try {
       const plateResult = await recognizeVehiclePlate(file, onProgress);
       if (plateResult.plate) {
