@@ -300,20 +300,34 @@ export async function recognizeWithTesseractEnhancements(image, options = {}) {
     }
   };
 
-  // Targeted vehicle plate pipeline
+  // Targeted vehicle plate pipeline:
+  // Combines full-image sparse pass (PSM 11) with localized crops (PSM 6 and PSM 11)
   if (options.plate) {
-    if (variants.plateCrop) {
-      const platePass = await testPass(variants.plateCrop, "6");
-      if (platePass?.hasPlate || (platePass?.score || 0) >= 50) return platePass.result;
-    }
-    const cropPass = await testPass(variants.crop, "6");
-    if (cropPass?.hasPlate || (cropPass?.score || 0) >= 60) return cropPass.result;
+    // 1. First test full image with PSM 11 (catches prominent plates without cropping mistakes)
+    const basePass11 = await testPass(variants.baseline, "11");
+    if (basePass11?.hasPlate) return basePass11.result;
 
-    const contrastPass = await testPass(variants.contrast, "6");
+    // 2. Test localized plate crop if detected
+    if (variants.plateCrop) {
+      const platePass6 = await testPass(variants.plateCrop, "6");
+      if (platePass6?.hasPlate || (platePass6?.score || 0) >= 50) return platePass6.result;
+
+      const platePass11 = await testPass(variants.plateCrop, "11");
+      if (platePass11?.hasPlate) return platePass11.result;
+    }
+
+    // 3. Test centered crop (PSM 6 and PSM 11)
+    const cropPass6 = await testPass(variants.crop, "6");
+    if (cropPass6?.hasPlate || (cropPass6?.score || 0) >= 60) return cropPass6.result;
+
+    const cropPass11 = await testPass(variants.crop, "11");
+    if (cropPass11?.hasPlate) return cropPass11.result;
+
+    // 4. Contrast variant fallback
+    const contrastPass = await testPass(variants.contrast, "11");
     if (contrastPass?.hasPlate) return contrastPass.result;
 
-    const basePass = await testPass(variants.baseline, "6");
-    return basePass?.result || bestResult || { data: { text: "", confidence: 0 } };
+    return basePass11?.result || cropPass6?.result || bestResult || { data: { text: "", confidence: 0 } };
   }
 
   // General text pipeline (Receipts, cards, signs, labels, packages):

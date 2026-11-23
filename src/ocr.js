@@ -36,9 +36,9 @@ export function sanitizeOcrText(rawText) {
     // Token-based filtering:
     // Drop tokens that have zero alphanumeric characters (isolated symbols/punctuation)
     // and strip leading/trailing punctuation from remaining words
-    const words = line.split(/\s+/).filter(Boolean);
+    const lineWords = line.split(/\s+/).filter(Boolean);
     const validWords = [];
-    for (const w of words) {
+    for (const w of lineWords) {
       if (!/[a-zA-Z0-9]/.test(w)) continue;
       const cleaned = w.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, "");
       if (cleaned) validWords.push(cleaned);
