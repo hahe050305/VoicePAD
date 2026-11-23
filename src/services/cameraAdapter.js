@@ -21,9 +21,13 @@ export async function capturePhotoNativeOrWeb(fallbackFileInputRef = null) {
         const res = await fetch(photo.webPath);
         const blob = await res.blob();
         const mimeType = photo.format ? `image/${photo.format}` : "image/jpeg";
-        return blob.type && blob.type.startsWith("image/")
+        const finalBlob = blob.type && blob.type.startsWith("image/")
           ? blob
           : new Blob([blob], { type: mimeType });
+        if (photo.path) {
+          finalBlob._nativePath = photo.path;
+        }
+        return finalBlob;
       }
       return null;
     } catch (err) {
@@ -38,5 +42,51 @@ export async function capturePhotoNativeOrWeb(fallbackFileInputRef = null) {
       fallbackFileInputRef.current.click();
     }
     return null; // Handled asynchronously via input onChange
+  }
+}
+
+/**
+ * Selects a photo from gallery:
+ * - On Native Phone: Opens system photo picker directly, retaining native path for zero-copy OCR
+ * - On Laptop / Browser: Triggers standard browser file input dialog
+ */
+export async function pickPhotoNativeOrWeb(fallbackFileInputRef = null) {
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const photo = await Camera.getPhoto({
+        quality: 85,
+        width: 1600,
+        allowEditing: false,
+        correctOrientation: true,
+        resultType: CameraResultType.Uri,
+        source: CameraSource.Photos,
+      });
+      if (photo?.webPath) {
+        const res = await fetch(photo.webPath);
+        const blob = await res.blob();
+        const mimeType = photo.format ? `image/${photo.format}` : "image/jpeg";
+        const finalBlob = blob.type && blob.type.startsWith("image/")
+          ? blob
+          : new Blob([blob], { type: mimeType });
+        if (photo.path) {
+          finalBlob._nativePath = photo.path;
+        }
+        return finalBlob;
+      }
+      return null;
+    } catch (err) {
+      if (err?.message !== "User cancelled photos app" && err?.message !== "User cancelled") {
+        console.warn("[CameraAdapter] Native photo picker failed, falling back to file input:", err);
+      }
+      if (fallbackFileInputRef?.current) {
+        fallbackFileInputRef.current.click();
+      }
+      return null;
+    }
+  } else {
+    if (fallbackFileInputRef && fallbackFileInputRef.current) {
+      fallbackFileInputRef.current.click();
+    }
+    return null;
   }
 }

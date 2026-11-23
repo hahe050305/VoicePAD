@@ -191,6 +191,23 @@ function blobToBase64(blob) {
  * The native plugin handles recognition asynchronously and supports arbitrary angles and 2-line plates.
  */
 async function recognizeWithNativeMLKit(file) {
+  // 1. Zero-copy fast path: Use existing on-disk native file path directly!
+  // This completely eliminates Base64 encoding, JSON-RPC bridge serialization, and disk writing.
+  if (file?._nativePath) {
+    try {
+      const result = await TextRecognition.processImage({
+        path: file._nativePath,
+      });
+      return {
+        text: result?.text?.trim() || "",
+        confidence: 0,
+      };
+    } catch (directErr) {
+      console.warn("[OCR] Direct native path OCR failed, falling back to cache file:", directErr);
+    }
+  }
+
+  // 2. Fallback path for raw Blobs (e.g. web file input on Android)
   const extension = file.type === "image/png" ? "png" : "jpg";
   const tempName = `ocr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.${extension}`;
   try {

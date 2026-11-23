@@ -20,7 +20,7 @@ import {
   stopAudioCaptureAndTranscribe,
   cancelAudioCapture,
 } from "./services/moonshineService.js";
-import { capturePhotoNativeOrWeb } from "./services/cameraAdapter.js";
+import { capturePhotoNativeOrWeb, pickPhotoNativeOrWeb } from "./services/cameraAdapter.js";
 import { createId } from "./id.js";
 
 // Map detected containers and scenes to high-probability occluded objects
@@ -945,8 +945,8 @@ const extractTagsFromText = (text) => { if (!text || !text.trim()) return ["#ima
 
       // Run OCR & CLIP Vector Embedding silently in background with staged pacing
       const processingTask = (async () => {
-        // Yield to allow the browser to paint the new card and render the immediate image
-        await new Promise((resolve) => setTimeout(resolve, 60));
+        // Yield briefly so the UI renders the new card and image instantly
+        await new Promise((resolve) => setTimeout(resolve, 30));
 
         for (let i = 0; i < newEntries.length; i++) {
           const entry = newEntries[i];
@@ -955,32 +955,6 @@ const extractTagsFromText = (text) => { if (!text || !text.trim()) return ["#ima
 
           try {
             console.log(`[Vision] Processing image ${i + 1}/${newEntries.length}...`);
-
-            // 1. Optimize thumbnail & storage first so card has lightweight asset
-            await prepareImageForStorage(file)
-              .then(async ({ optimizedBlob, thumbnailBlob }) => {
-                const patch = { imageBlob: optimizedBlob };
-                if (thumbnailBlob && thumbnailBlob !== file) {
-                  patch.thumbnailBlob = thumbnailBlob;
-                  const thumbnailUrl = URL.createObjectURL(thumbnailBlob);
-                  setImageThumbnailUrl(entry.id, thumbnailUrl);
-                  setSelectedImage((current) => current?.id === entry.id
-                    ? { ...current, url: thumbnailUrl, preview: true }
-                    : current);
-                  const updatePreview = (item) => item.id === entry.id
-                    ? { ...item, thumbnailUrl }
-                    : item;
-                  setFilteredEntries((current) => current.map(updatePreview));
-                  setAllEntries((current) => current.map(updatePreview));
-                  setSelectedEntry((current) => current?.id === entry.id
-                    ? updatePreview(current)
-                    : current);
-                }
-                await db.images.update(entry.id, patch);
-              })
-              .catch((optimizationError) => {
-                console.warn("[Vision] Image optimization skipped:", optimizationError);
-              });
 
             const isValidTag = (tag) => {
               const clean = tag.replace("#", "").toLowerCase();
@@ -1008,43 +982,76 @@ const extractTagsFromText = (text) => { if (!text || !text.trim()) return ["#ima
             let currentOcrText = "";
             let currentPlate = null;
 
-            // 2. Run OCR (Native ML Kit on mobile or Web OCR on browser)
-            try {
-              const ocrResult = await performOCR(file);
-              const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
-              currentPlate = typeof ocrResult === "object" && ocrResult?.plate ? ocrResult.plate : null;
-              const structuredIds = typeof ocrResult === "object" && Array.isArray(ocrResult?.structuredIds) ? ocrResult.structuredIds : [];
-              const cleanText = extractedText.trim();
-              currentOcrText = currentPlate && !cleanText.includes(currentPlate)
-                ? `${currentPlate}\n${cleanText}`.trim()
-                : cleanText;
+            // 1. Immediate OCR: Fires concurrently on tick 0 with zero disk wait
+            const ocrPromise = (async () => {
+              try {
+                const ocrResult = await performOCR(file);
+                const extractedText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "");
+                currentPlate = typeof ocrResult === "object" && ocrResult?.plate ? ocrResult.plate : null;
+                const structuredIds = typeof ocrResult === "object" && Array.isArray(ocrResult?.structuredIds) ? ocrResult.structuredIds : [];
+                const cleanText = extractedText.trim();
+                currentOcrText = currentPlate && !cleanText.includes(currentPlate)
+                  ? `${currentPlate}\n${cleanText}`.trim()
+                  : cleanText;
 
-              const textTags = cleanText ? deriveTags(cleanText) : [];
-              const idTags = structuredIds.map((id) => `#${id.value.toLowerCase()}`);
-              const plateTags = currentPlate ? ["#vehicle", `#${currentPlate.replace(/\s+/g, "").toLowerCase()}`] : [];
-              const docTags = structuredIds.length > 0 ? ["#document"] : [];
+                const textTags = cleanText ? deriveTags(cleanText) : [];
+                const idTags = structuredIds.map((id) => `#${id.value.toLowerCase()}`);
+                const plateTags = currentPlate ? ["#vehicle", `#${currentPlate.replace(/\s+/g, "").toLowerCase()}`] : [];
+                const docTags = structuredIds.length > 0 ? ["#document"] : [];
 
-              const ocrTags = Array.from(new Set([
-                ...textTags,
-                ...plateTags,
-                ...docTags,
-                ...idTags,
-                "#photo",
-              ])).filter(isValidTag);
+                const ocrTags = Array.from(new Set([
+                  ...textTags,
+                  ...plateTags,
+                  ...docTags,
+                  ...idTags,
+                  "#photo",
+                ])).filter(isValidTag);
 
-              // Update the UI card immediately with OCR results as soon as ready
-              await syncCard({
-                ocr: currentOcrText,
-                isPureImage: !currentPlate && structuredIds.length === 0 && (currentOcrText.length === 0 || isPureImageText(currentOcrText)),
-                tags: ocrTags.length > 0 ? ocrTags : ["#photo"],
+                // Update the UI card immediately with OCR results as soon as ready
+                await syncCard({
+                  ocr: currentOcrText,
+                  isPureImage: !currentPlate && structuredIds.length === 0 && (currentOcrText.length === 0 || isPureImageText(currentOcrText)),
+                  tags: ocrTags.length > 0 ? ocrTags : ["#photo"],
+                });
+              } catch (ocrErr) {
+                console.warn("[Vision] OCR detection pass failed:", ocrErr);
+              }
+            })();
+
+            // 2. Storage preparation & thumbnail generation in parallel
+            let generatedThumbnail = null;
+            const optimizePromise = prepareImageForStorage(file)
+              .then(async ({ optimizedBlob, thumbnailBlob }) => {
+                generatedThumbnail = thumbnailBlob;
+                const patch = { imageBlob: optimizedBlob };
+                if (thumbnailBlob && thumbnailBlob !== file) {
+                  patch.thumbnailBlob = thumbnailBlob;
+                  const thumbnailUrl = URL.createObjectURL(thumbnailBlob);
+                  setImageThumbnailUrl(entry.id, thumbnailUrl);
+                  setSelectedImage((current) => current?.id === entry.id
+                    ? { ...current, url: thumbnailUrl, preview: true }
+                    : current);
+                  const updatePreview = (item) => item.id === entry.id
+                    ? { ...item, thumbnailUrl }
+                    : item;
+                  setFilteredEntries((current) => current.map(updatePreview));
+                  setAllEntries((current) => current.map(updatePreview));
+                  setSelectedEntry((current) => current?.id === entry.id
+                    ? updatePreview(current)
+                    : current);
+                }
+                await db.images.update(entry.id, patch);
+              })
+              .catch((optimizationError) => {
+                console.warn("[Vision] Image optimization skipped:", optimizationError);
               });
-            } catch (ocrErr) {
-              console.warn("[Vision] OCR detection pass failed:", ocrErr);
-            }
 
-            // 3. Run CLIP vector embedding sequentially to keep mobile CPU responsive
+            await Promise.all([ocrPromise, optimizePromise]);
+
+            // 3. Fast CLIP embedding using compact thumbnail to eliminate worker decoding overhead
             try {
-              const embedResult = await embedImage(file);
+              const imageForClip = generatedThumbnail || file;
+              const embedResult = await embedImage(imageForClip);
               const embedding = Array.isArray(embedResult)
                 ? embedResult
                 : embedResult?.embedding;
@@ -1147,6 +1154,17 @@ const extractTagsFromText = (text) => { if (!text || !text.trim()) return ["#ima
       }
     } else {
       cameraInputRef.current?.click();
+    }
+  };
+
+  const handlePickPhotoClick = async () => {
+    if (Capacitor.isNativePlatform()) {
+      const blob = await pickPhotoNativeOrWeb(fileInputRef);
+      if (blob) {
+        await processAndStoreImages([blob]);
+      }
+    } else {
+      fileInputRef.current?.click();
     }
   };
 
@@ -1450,7 +1468,7 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
   </button>
   <button
     type="button"
-    onClick={() => fileInputRef.current?.click()}
+    onClick={handlePickPhotoClick}
     className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-medium bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] text-slate-300 backdrop-blur-md transition active:scale-95 shadow-sm"
   >
     <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
