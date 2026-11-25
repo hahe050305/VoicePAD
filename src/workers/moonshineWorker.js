@@ -78,9 +78,19 @@ self.onmessage = async ({ data }) => {
         return;
       }
 
-      const output = await transcriber(audioData);
-      const text = typeof output === "string" ? output : (output?.text || "");
-      self.postMessage({ id, result: { text: text.trim() } });
+      // @huggingface/transformers' _call_moonshine defaults max_new_tokens to
+      // Math.floor(samples / 16000) * 6, which evaluates to 0 for <1s audio.
+      // Ensure a generous token budget so short words and phrases transcribe reliably.
+      const durationSec = audioData.length / 16000;
+      const max_new_tokens = Math.max(32, Math.ceil(durationSec * 16));
+
+      const output = await transcriber(audioData, { max_new_tokens });
+      const rawText = Array.isArray(output)
+        ? output[0]?.text || ""
+        : typeof output === "string"
+          ? output
+          : output?.text || "";
+      self.postMessage({ id, result: { text: rawText.trim() } });
       return;
     }
 

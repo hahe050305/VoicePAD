@@ -15,8 +15,10 @@ import {
 import { prewarmOCR } from "./services/tesseractService.js";
 import {
   prewarmMoonshine,
+  isMoonshineReady,
   subscribeMoonshineStatus,
   startAudioCapture,
+  transcribeCurrentAudioSnapshot,
   stopAudioCaptureAndTranscribe,
   cancelAudioCapture,
 } from "./services/moonshineService.js";
@@ -299,6 +301,8 @@ void (async () => {
   await prewarmVisionModel();
   await waitForIdle();
   await prewarmOCR();
+  await waitForIdle();
+  void prewarmMoonshine();
 })();
 
     const unsubscribeMoonshine = subscribeMoonshineStatus(setMoonshineStatus);
@@ -482,6 +486,42 @@ searchDebounceRef.current = setTimeout(async () => {
       stopAudioPipeline();
     };
   }, [hasVoiceEnergy, stopAudioPipeline]);
+
+  // Live offline Moonshine transcription while recording so filtering works
+  // even when browser Web Speech API is unavailable, offline, or blocked by getUserMedia.
+  useEffect(() => {
+    if (!isListening) return undefined;
+    let cancelled = false;
+
+    const timer = window.setInterval(async () => {
+      if (cancelled || !listeningRef.current || !isMoonshineReady()) return;
+      const text = (await transcribeCurrentAudioSnapshot()).trim();
+      if (cancelled || !listeningRef.current || !text) return;
+
+      setVoiceTranscript(text);
+      setSearchMode("voice");
+      const instantHits = lexicalSearch(text);
+      if (instantHits.length > 0) {
+        setFilteredEntries(instantHits);
+      }
+      try {
+        const result = await fastSearch(text);
+        if (cancelled || !listeningRef.current) return;
+        if (result) {
+          setFilteredEntries(Array.isArray(result) ? result : [result]);
+        } else if (instantHits.length === 0) {
+          setFilteredEntries([]);
+        }
+      } catch {
+        // Keep lexical hits if vector search fails during live preview
+      }
+    }, 1600);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [isListening]);
 
   const toggleListening = async () => {
     if (listeningRef.current) {
@@ -1338,9 +1378,11 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
       >
         <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping shrink-0" />
         <span className="tracking-tight">
-          {visionModelStatus.progress != null && visionModelStatus.progress > 0
+          {isVisionLoading && visionModelStatus.progress != null && visionModelStatus.progress > 0
             ? `AI Vision ${visionModelStatus.progress}%`
-            : "AI Readying..."}
+            : isMoonshineLoading && moonshineStatus.progress != null && moonshineStatus.progress > 0
+              ? `AI Voice ${moonshineStatus.progress}%`
+              : "AI Readying..."}
         </span>
       </div>
     ) : showAiReadyBadge ? (

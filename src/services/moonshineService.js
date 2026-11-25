@@ -8,6 +8,10 @@ import { ensureMoonshineModelCached } from "./modelCache.js";
 let moonshineStatus = { state: "idle", progress: null, error: null };
 const statusListeners = new Set();
 
+export function isMoonshineReady() {
+  return moonshineStatus.state === "ready";
+}
+
 export function subscribeMoonshineStatus(callback) {
   statusListeners.add(callback);
   callback(moonshineStatus);
@@ -107,8 +111,9 @@ let activeProcessor = null;
 let activeMuteGain = null;
 let recordedAudioChunks = [];
 let capturedSampleRate = 16000;
+let liveSnapshotInFlight = false;
 
-function resampleTo16k(audioBuffer, sourceSampleRate) {
+export function resampleTo16k(audioBuffer, sourceSampleRate) {
   if (!sourceSampleRate || sourceSampleRate === 16000) return audioBuffer;
   const ratio = sourceSampleRate / 16000;
   const newLength = Math.max(1, Math.round(audioBuffer.length / ratio));
@@ -123,92 +128,203 @@ function resampleTo16k(audioBuffer, sourceSampleRate) {
   return result;
 }
 
+function mergeChunks(chunks) {
+  const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
+  const audioData = new Float32Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    audioData.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return audioData;
+}
+
+/**
+ * Removes DC offset, trims leading/trailing silence, and gently normalizes
+ * quiet microphone speech for Moonshine's raw-waveform frontend.
+ * Returns null if the buffer contains only silence or is too short.
+ */
+export function preparePcmForMoonshine(pcm16k, minSamples = 16000 * 0.2) {
+  if (!pcm16k || pcm16k.length < minSamples) return null;
+
+  // 1. Remove DC offset and find peak amplitude
+  let sum = 0;
+  for (let i = 0; i < pcm16k.length; i++) {
+    sum += pcm16k[i];
+  }
+  const mean = sum / pcm16k.length;
+
+  const centered = new Float32Array(pcm16k.length);
+  let peak = 0;
+  for (let i = 0; i < pcm16k.length; i++) {
+    const v = pcm16k[i] - mean;
+    centered[i] = v;
+    const abs = Math.abs(v);
+    if (abs > peak) peak = abs;
+  }
+
+  // Pure silence / dead mic
+  if (peak < 0.002) return null;
+
+  // 2. Trim leading/trailing silence with ~150ms padding
+  const threshold = Math.max(0.003, peak * 0.04);
+  const padSamples = 2400; // 150ms at 16kHz
+  let start = 0;
+  while (start < centered.length && Math.abs(centered[start]) < threshold) {
+    start++;
+  }
+  let end = centered.length - 1;
+  while (end > start && Math.abs(centered[end]) < threshold) {
+    end--;
+  }
+
+  if (end <= start) return null;
+
+  const trimStart = Math.max(0, start - padSamples);
+  const trimEnd = Math.min(centered.length, end + 1 + padSamples);
+  const trimmed = centered.subarray(trimStart, trimEnd);
+
+  if (trimmed.length < minSamples) return null;
+
+  // 3. Gently normalize quiet speech without amplifying background hiss
+  const gain = peak < 0.35 ? Math.min(8, 0.5 / peak) : 1;
+  if (gain === 1) {
+    return new Float32Array(trimmed);
+  }
+
+  const normalized = new Float32Array(trimmed.length);
+  for (let i = 0; i < trimmed.length; i++) {
+    const scaled = trimmed[i] * gain;
+    normalized[i] = scaled > 1 ? 1 : scaled < -1 ? -1 : scaled;
+  }
+  return normalized;
+}
+
 /**
  * Starts recording audio from the user's microphone with hardware noise suppression,
  * echo cancellation, and auto-gain.
  */
 export async function startAudioCapture() {
-  if (Capacitor.isNativePlatform()) {
+  // Create AudioContext synchronously during the user gesture before awaiting permissions/mic
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  let ctx = null;
+  if (AudioCtx) {
     try {
-      const { VoiceRecorder } = await import("capacitor-voice-recorder");
-      const perm = await VoiceRecorder.hasAudioRecordingPermission();
-      if (!perm?.value) {
-        await VoiceRecorder.requestAudioRecordingPermission();
-      }
-    } catch (e) {
-      console.warn("[Moonshine] Native mic permission check:", e);
+      ctx = new AudioCtx({ sampleRate: 16000 });
+    } catch {
+      ctx = new AudioCtx();
     }
   }
 
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    throw new Error("Microphone capture is not supported in this browser.");
-  }
-
-  // 1. Hardware-level constraints for noise reduction
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      echoCancellation: { ideal: true },
-      noiseSuppression: { ideal: true },
-      autoGainControl: { ideal: true },
-      channelCount: 1,
-      sampleRate: { ideal: 16000 },
-    },
-  });
-
-  activeMediaStream = stream;
-  recordedAudioChunks = [];
-
-  const AudioCtx = window.AudioContext || window.webkitAudioContext;
-  let ctx;
   try {
-    ctx = new AudioCtx({ sampleRate: 16000 });
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const { VoiceRecorder } = await import("capacitor-voice-recorder");
+        const perm = await VoiceRecorder.hasAudioRecordingPermission();
+        if (!perm?.value) {
+          await VoiceRecorder.requestAudioRecordingPermission();
+        }
+      } catch (e) {
+        console.warn("[Moonshine] Native mic permission check:", e);
+      }
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error("Microphone capture is not supported in this browser.");
+    }
+
+    // 1. Hardware-level constraints for noise reduction
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: { ideal: true },
+        noiseSuppression: { ideal: true },
+        autoGainControl: { ideal: true },
+        channelCount: 1,
+        sampleRate: { ideal: 16000 },
+      },
+    });
+
+    activeMediaStream = stream;
+    recordedAudioChunks = [];
+
+    if (!ctx) {
+      ctx = new AudioCtx();
+    }
+    if (ctx.state === "suspended") {
+      await ctx.resume();
+    }
+
+    activeAudioContext = ctx;
+    capturedSampleRate = ctx.sampleRate || 16000;
+
+    const source = ctx.createMediaStreamSource(stream);
+
+    // High-pass filter cuts fan vibration, desk rumble below 85Hz
+    const highPass = ctx.createBiquadFilter();
+    highPass.type = "highpass";
+    highPass.frequency.value = 85;
+    highPass.Q.value = 0.7;
+
+    // Vocal boost filter around speech resonance
+    const vocalBoost = ctx.createBiquadFilter();
+    vocalBoost.type = "peaking";
+    vocalBoost.frequency.value = 2000;
+    vocalBoost.Q.value = 1.0;
+    vocalBoost.gain.value = 3.0;
+
+    // Buffer chunk collector (4096 samples per chunk = ~256ms intervals at 16kHz)
+    const processor = ctx.createScriptProcessor(4096, 1, 1);
+    activeProcessor = processor;
+
+    processor.onaudioprocess = (e) => {
+      const inputData = e.inputBuffer.getChannelData(0);
+      // Clone buffer
+      recordedAudioChunks.push(new Float32Array(inputData));
+    };
+
+    source.connect(highPass);
+    highPass.connect(vocalBoost);
+    vocalBoost.connect(processor);
+    // Keep ScriptProcessor callbacks alive without playing the microphone back.
+    const muteGain = ctx.createGain();
+    muteGain.gain.value = 0;
+    processor.connect(muteGain);
+    muteGain.connect(ctx.destination);
+    activeMuteGain = muteGain;
+
+    return stream;
+  } catch (err) {
+    if (ctx && ctx.state !== "closed") {
+      try { await ctx.close(); } catch { /* ignore */ }
+    }
+    throw err;
+  }
+}
+
+/**
+ * Non-destructive live transcription of the audio recorded so far.
+ * Used while the mic is active so filtering works even when Web Speech API is unavailable.
+ */
+export async function transcribeCurrentAudioSnapshot() {
+  if (liveSnapshotInFlight || recordedAudioChunks.length === 0) {
+    return "";
+  }
+  const chunksSnapshot = recordedAudioChunks.slice();
+  const sampleRate = capturedSampleRate || activeAudioContext?.sampleRate || 16000;
+  const audioData = mergeChunks(chunksSnapshot);
+  const pcm16k = resampleTo16k(audioData, sampleRate);
+  const prepared = preparePcmForMoonshine(pcm16k, 16000 * 0.4);
+  if (!prepared) return "";
+
+  liveSnapshotInFlight = true;
+  try {
+    const result = await runTask("transcribe", prepared);
+    return result?.text || "";
   } catch {
-    ctx = new AudioCtx();
+    return "";
+  } finally {
+    liveSnapshotInFlight = false;
   }
-
-  if (ctx.state === "suspended") {
-    await ctx.resume();
-  }
-
-  activeAudioContext = ctx;
-  capturedSampleRate = ctx.sampleRate || 16000;
-
-  const source = ctx.createMediaStreamSource(stream);
-
-  // High-pass filter cuts fan vibration, desk rumble below 85Hz
-  const highPass = ctx.createBiquadFilter();
-  highPass.type = "highpass";
-  highPass.frequency.value = 85;
-  highPass.Q.value = 0.7;
-
-  // Vocal boost filter around speech resonance
-  const vocalBoost = ctx.createBiquadFilter();
-  vocalBoost.type = "peaking";
-  vocalBoost.frequency.value = 2000;
-  vocalBoost.Q.value = 1.0;
-  vocalBoost.gain.value = 3.0;
-
-  // Buffer chunk collector (4096 samples per chunk = ~256ms intervals at 16kHz)
-  const processor = ctx.createScriptProcessor(4096, 1, 1);
-  activeProcessor = processor;
-
-  processor.onaudioprocess = (e) => {
-    const inputData = e.inputBuffer.getChannelData(0);
-    // Clone buffer
-    recordedAudioChunks.push(new Float32Array(inputData));
-  };
-
-  source.connect(highPass);
-  highPass.connect(vocalBoost);
-  vocalBoost.connect(processor);
-  // Keep ScriptProcessor callbacks alive without playing the microphone back.
-  const muteGain = ctx.createGain();
-  muteGain.gain.value = 0;
-  processor.connect(muteGain);
-  muteGain.connect(ctx.destination);
-  activeMuteGain = muteGain;
-
-  return stream;
 }
 
 /**
@@ -250,24 +366,17 @@ export async function stopAudioCaptureAndTranscribe() {
   }
 
   // Flatten collected chunks into a contiguous Float32Array
-  const totalLength = recordedAudioChunks.reduce((acc, chunk) => acc + chunk.length, 0);
-  const audioData = new Float32Array(totalLength);
-  let offset = 0;
-  for (const chunk of recordedAudioChunks) {
-    audioData.set(chunk, offset);
-    offset += chunk.length;
-  }
+  const audioData = mergeChunks(recordedAudioChunks);
   recordedAudioChunks = [];
 
   // Resample from hardware rate to 16kHz for Moonshine
   const pcm16k = resampleTo16k(audioData, sampleRate);
-
-  // Minimum 0.3 seconds of speech to avoid transcribing micro-clicks
-  if (pcm16k.length < 16000 * 0.3) {
+  const prepared = preparePcmForMoonshine(pcm16k, 16000 * 0.2);
+  if (!prepared) {
     return "";
   }
 
-  const result = await runTask("transcribe", pcm16k);
+  const result = await runTask("transcribe", prepared);
   return result?.text || "";
 }
 
