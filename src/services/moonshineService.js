@@ -1,6 +1,5 @@
 // src/services/moonshineService.js
 import { Capacitor } from "@capacitor/core";
-import { ensureMoonshineModelCached } from "./modelCache.js";
 
 // Client service for on-device Moonshine Speech-to-Text.
 // Captures 16kHz mono PCM audio via Web Audio API and runs transcription in an offline Web Worker.
@@ -75,11 +74,8 @@ let moonshineWarmupPromise = null;
 export function prewarmMoonshine(delay = 0) {
   if (typeof window === "undefined") return Promise.resolve(null);
   if (!moonshineWarmupPromise) {
-    moonshineWarmupPromise = ensureMoonshineModelCached()
-      .catch((error) => {
-        console.warn("[Moonshine] Cache priming failed:", error);
-      })
-      .then(() => new Promise((resolve) => setTimeout(resolve, delay)))
+    updateStatus({ state: "loading", progress: 0, error: null });
+    moonshineWarmupPromise = new Promise((resolve) => setTimeout(resolve, delay))
       .then(() => runTask("warmup"))
       .catch((error) => {
         moonshineWarmupPromise = null;

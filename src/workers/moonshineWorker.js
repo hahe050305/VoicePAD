@@ -34,7 +34,7 @@ async function getTranscriber() {
       const modelId = "onnx-community/moonshine-tiny-ONNX";
 
       const progress_callback = (progress) => {
-        if (progress.status === "progress_total" || progress.status === "progress") {
+        if (progress.status === "progress_total") {
           postStatus({
             state: "loading",
             progress: Math.round(progress.progress ?? 0),

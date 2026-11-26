@@ -515,7 +515,7 @@ searchDebounceRef.current = setTimeout(async () => {
       } catch {
         // Keep lexical hits if vector search fails during live preview
       }
-    }, 1600);
+    }, 800);
 
     return () => {
       cancelled = true;
