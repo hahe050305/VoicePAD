@@ -9,6 +9,7 @@ import {
   createImageThumbnail,
   prepareImageForStorage,
   embedImage,
+  isVisionModelReady,
   subscribeVisionModelStatus,
   prewarmVisionModel,
 } from "./services/visionService.js";
@@ -89,7 +90,6 @@ const [filteredEntries, setFilteredEntries] = useState([]);
   const [moonshineStatus, setMoonshineStatus] = useState({ state: "idle", progress: null, error: null });
   const [visionModelStatus, setVisionModelStatus] = useState({ state: "idle", progress: null, error: null });
   const [ocrStatus, setOcrStatus] = useState({ state: "idle", progress: null, error: null });
-  const [isVisionOcrPipelineActive, setIsVisionOcrPipelineActive] = useState(false);
   const [modelsPreviouslyCached, setModelsPreviouslyCached] = useState(() => {
     try {
       return typeof window !== "undefined" && localStorage.getItem("voicepad_models_cached") === "true";
@@ -97,6 +97,8 @@ const [filteredEntries, setFilteredEntries] = useState([]);
       return false;
     }
   });
+  const [showModelsPopup, setShowModelsPopup] = useState(false);
+  const modelsPopupDismissedRef = useRef(false);
   const [showAiReadyBadge, setShowAiReadyBadge] = useState(false);
   const [manualNote, setManualNote] = useState("");
   const [autoTags, setAutoTags] = useState([]);
@@ -104,22 +106,29 @@ const [filteredEntries, setFilteredEntries] = useState([]);
 
   const isVisionLoading = visionModelStatus.state === "loading";
   const isOcrLoading = ocrStatus.state === "loading";
-  const isVisionOrOcrLoading = isVisionLoading || isOcrLoading || isVisionOcrPipelineActive;
   const isMoonshineLoading = moonshineStatus.state === "loading";
-  const isAnyModelLoading = !modelsPreviouslyCached && (isVisionOrOcrLoading || isMoonshineLoading);
+  const isAnyModelLoading = !modelsPreviouslyCached && (isVisionLoading || isOcrLoading || isMoonshineLoading);
+  const allModelsReady =
+    visionModelStatus.state === "ready" &&
+    ocrStatus.state === "ready" &&
+    moonshineStatus.state === "ready";
 
   useEffect(() => {
-    const allReady =
-      visionModelStatus.state === "ready" &&
-      ocrStatus.state === "ready" &&
-      moonshineStatus.state === "ready";
-    if (allReady && !modelsPreviouslyCached) {
+    if (!modelsPreviouslyCached && isAnyModelLoading && !modelsPopupDismissedRef.current) {
+      setShowModelsPopup(true);
+    }
+  }, [modelsPreviouslyCached, isAnyModelLoading]);
+
+  useEffect(() => {
+    if (allModelsReady && !modelsPreviouslyCached) {
       setModelsPreviouslyCached(true);
       try {
         localStorage.setItem("voicepad_models_cached", "true");
       } catch { /* ignore storage errors */ }
+      const closeTimer = setTimeout(() => setShowModelsPopup(false), 2200);
+      return () => clearTimeout(closeTimer);
     }
-  }, [visionModelStatus.state, ocrStatus.state, moonshineStatus.state, modelsPreviouslyCached]);
+  }, [allModelsReady, modelsPreviouslyCached]);
 
   useEffect(() => {
     if (
@@ -318,25 +327,10 @@ const loadEntries = useCallback(async () => { await seedDemoData();
     const unsubscribeOcrStatus = subscribeOcrStatus(setOcrStatus);
     const unsubscribeMoonshine = subscribeMoonshineStatus(setMoonshineStatus);
 
-    // Prewarm CLIP followed by OCR in one pipeline, and Moonshine Voice in parallel
-    // so both download proactively on startup without waiting for the mic button.
-    const waitForIdle = () => new Promise((resolve) => {
-      if (typeof window.requestIdleCallback === "function") {
-        window.requestIdleCallback(resolve, { timeout: 2000 });
-      } else {
-        window.setTimeout(resolve, 500);
-      }
-    });
-    setIsVisionOcrPipelineActive(true);
-    void (async () => {
-      try {
-        await prewarmVisionModel();
-        await waitForIdle();
-        await prewarmOCR();
-      } finally {
-        setIsVisionOcrPipelineActive(false);
-      }
-    })();
+    // Initialize CLIP, OCR, and Moonshine Voice downloads in parallel on startup
+    // so all 3 models are ready before the user interacts with camera or mic.
+    void prewarmVisionModel();
+    void prewarmOCR();
     void prewarmMoonshine();
 
     return () => {
@@ -1130,29 +1124,31 @@ const extractTagsFromText = (text) => { if (!text || !text.trim()) return ["#ima
 
             await Promise.all([ocrPromise, optimizePromise]);
 
-            // 3. Fast CLIP embedding using compact thumbnail to eliminate worker decoding overhead
-            try {
-              const imageForClip = generatedThumbnail || file;
-              const embedResult = await embedImage(imageForClip);
-              const embedding = Array.isArray(embedResult)
-                ? embedResult
-                : embedResult?.embedding;
-              const visualTags = Array.isArray(embedResult?.visualTags)
-                ? embedResult.visualTags
-                : [];
+            // 3. Fast CLIP embedding (non-blocking: skip waiting if CLIP is still downloading)
+            if (isVisionModelReady()) {
+              try {
+                const imageForClip = generatedThumbnail || file;
+                const embedResult = await embedImage(imageForClip);
+                const embedding = Array.isArray(embedResult)
+                  ? embedResult
+                  : embedResult?.embedding;
+                const visualTags = Array.isArray(embedResult?.visualTags)
+                  ? embedResult.visualTags
+                  : [];
 
-              const patch = {};
-              if (embedding && Array.isArray(embedding)) {
-                patch.embedding = embedding;
+                const patch = {};
+                if (embedding && Array.isArray(embedding)) {
+                  patch.embedding = embedding;
+                }
+                if (visualTags.length > 0) {
+                  patch.tags = visualTags;
+                }
+                if (Object.keys(patch).length > 0) {
+                  await syncCard(patch);
+                }
+              } catch (embedErr) {
+                console.warn("[Vision] CLIP embedding pass failed:", embedErr);
               }
-              if (visualTags.length > 0) {
-                patch.tags = visualTags;
-              }
-              if (Object.keys(patch).length > 0) {
-                await syncCard(patch);
-              }
-            } catch (embedErr) {
-              console.warn("[Vision] CLIP embedding pass failed:", embedErr);
             }
 
             // Low-confidence check: Did CLIP / OCR fail to classify or find a specific object?
@@ -1412,79 +1408,102 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
       </p>
     </div>
   </div>
-  <div className="flex items-center gap-2">
-    {isAnyModelLoading ? (
-      <div className="flex flex-col gap-1 min-w-[130px]">
-        {(isVisionOrOcrLoading || visionModelStatus.state === "ready") && (
-          <div
-            className="flex flex-col gap-0.5 px-2.5 py-1 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-[10px] font-medium"
-            title="CLIP Vision followed by OCR"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="tracking-tight">
-                {isVisionLoading
-                  ? `CLIP ${visionModelStatus.progress ?? 0}%`
-                  : isOcrLoading
-                    ? `OCR ${ocrStatus.progress ?? 0}%`
-                    : "CLIP + OCR ✓"}
-              </span>
-            </div>
-            <div className="w-full h-1 rounded-full bg-indigo-950/80 overflow-hidden">
-              <div
-                className="h-full bg-indigo-400 transition-all duration-200"
-                style={{
-                  width: `${
-                    isVisionLoading
-                      ? Math.max(4, visionModelStatus.progress ?? 0)
-                      : isOcrLoading
-                        ? Math.max(4, ocrStatus.progress ?? 0)
-                        : 100
-                  }%`,
-                }}
-              />
-            </div>
-          </div>
-        )}
-        {(isMoonshineLoading || moonshineStatus.state === "ready") && (
-          <div
-            className="flex flex-col gap-0.5 px-2.5 py-1 rounded-lg bg-violet-500/10 border border-violet-500/20 text-violet-300 text-[10px] font-medium"
-            title="On-device Voice Model"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="tracking-tight">
-                {isMoonshineLoading
-                  ? `Voice ${moonshineStatus.progress ?? 0}%`
-                  : "Voice ✓"}
-              </span>
-            </div>
-            <div className="w-full h-1 rounded-full bg-violet-950/80 overflow-hidden">
-              <div
-                className="h-full bg-violet-400 transition-all duration-200"
-                style={{
-                  width: `${
-                    isMoonshineLoading
-                      ? Math.max(4, moonshineStatus.progress ?? 0)
-                      : 100
-                  }%`,
-                }}
-              />
-            </div>
-          </div>
-        )}
-      </div>
-    ) : showAiReadyBadge ? (
-      <div
-        className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-[10px] font-medium animate-in fade-in zoom-in-95 duration-200"
-        title="On-device AI active"
-      >
-        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] shrink-0" />
-        <span className="tracking-tight">On-Device AI Active</span>
-      </div>
-    ) : (
+  <div className="relative flex items-center gap-2">
+    <button
+      type="button"
+      onClick={() => {
+        setShowModelsPopup((prev) => {
+          const next = !prev;
+          if (!next) modelsPopupDismissedRef.current = true;
+          return next;
+        });
+      }}
+      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border transition ${
+        isAnyModelLoading
+          ? "bg-indigo-500/15 border-indigo-500/30 text-indigo-300"
+          : showAiReadyBadge
+            ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-300"
+            : "bg-white/[0.04] hover:bg-white/[0.08] border-white/[0.08] text-slate-300"
+      }`}
+      title="View on-device AI model status"
+      aria-label="AI Models status"
+    >
       <span
-        className="w-2 h-2 rounded-full bg-emerald-400/80 shadow-[0_0_8px_rgba(52,211,153,0.6)]"
-        title="On-device AI active"
+        className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+          isAnyModelLoading
+            ? "bg-indigo-400 animate-ping"
+            : allModelsReady
+              ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]"
+              : "bg-amber-400"
+        }`}
       />
+      <span className="tracking-tight">
+        {isAnyModelLoading
+          ? `AI Models ${Math.round(
+              ((visionModelStatus.state === "ready" ? 100 : (visionModelStatus.progress ?? 0)) +
+                (ocrStatus.state === "ready" ? 100 : (ocrStatus.progress ?? 0)) +
+                (moonshineStatus.state === "ready" ? 100 : (moonshineStatus.progress ?? 0))) /
+                3
+            )}%`
+          : showAiReadyBadge
+            ? "On-Device AI Active"
+            : "AI Models"}
+      </span>
+    </button>
+
+    {showModelsPopup && (
+      <div className="absolute top-full right-0 mt-2 w-60 p-3 rounded-2xl bg-[#0d111a]/95 backdrop-blur-xl border border-white/10 shadow-2xl z-50 space-y-2.5 animate-in fade-in zoom-in-95 duration-150">
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-semibold text-white/90 tracking-tight">
+            On-Device AI Models
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              modelsPopupDismissedRef.current = true;
+              setShowModelsPopup(false);
+            }}
+            className="text-slate-400 hover:text-white text-xs px-1 rounded"
+            aria-label="Close AI models popup"
+          >
+            ✕
+          </button>
+        </div>
+
+        {[
+          { key: "clip", label: "CLIP Vision", status: visionModelStatus, barClass: "bg-indigo-400", trackClass: "bg-indigo-950/80" },
+          { key: "ocr", label: "OCR Text", status: ocrStatus, barClass: "bg-sky-400", trackClass: "bg-sky-950/80" },
+          { key: "voice", label: "Voice (Moonshine)", status: moonshineStatus, barClass: "bg-violet-400", trackClass: "bg-violet-950/80" },
+        ].map(({ key, label, status, barClass, trackClass }) => {
+          const isReady = status.state === "ready";
+          const isError = status.state === "error";
+          const pct = isReady ? 100 : Math.max(0, Math.min(100, status.progress ?? 0));
+          return (
+            <div key={key} className="space-y-1">
+              <div className="flex items-center justify-between text-[10px]">
+                <span className="text-slate-300 font-medium">{label}</span>
+                <span
+                  className={
+                    isReady
+                      ? "text-emerald-400 font-semibold"
+                      : isError
+                        ? "text-amber-400"
+                        : "text-slate-400"
+                  }
+                >
+                  {isReady ? "Ready ✓" : isError ? "Offline" : `${pct}%`}
+                </span>
+              </div>
+              <div className={`w-full h-1.5 rounded-full ${trackClass} overflow-hidden`}>
+                <div
+                  className={`h-full transition-all duration-200 ${isReady ? "bg-emerald-400" : isError ? "bg-amber-400/60" : barClass}`}
+                  style={{ width: `${isReady ? 100 : Math.max(status.state === "loading" ? 4 : 0, pct)}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
     )}
     <button
       type="button"
