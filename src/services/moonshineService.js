@@ -162,9 +162,10 @@ export function preparePcmForMoonshine(pcm16k, minSamples = 16000 * 0.2) {
   // Pure silence / dead mic
   if (peak < 0.002) return null;
 
-  // 2. Trim leading/trailing silence with ~150ms padding
-  const threshold = Math.max(0.003, peak * 0.04);
-  const padSamples = 2400; // 150ms at 16kHz
+  // 2. Trim only true dead silence with generous 250ms padding so soft initial
+  // consonants (e.g. "b", "p", "k") are never clipped.
+  const threshold = Math.min(0.008, peak * 0.015);
+  const padSamples = 4000; // 250ms at 16kHz
   let start = 0;
   while (start < centered.length && Math.abs(centered[start]) < threshold) {
     start++;
@@ -255,18 +256,11 @@ export async function startAudioCapture() {
 
     const source = ctx.createMediaStreamSource(stream);
 
-    // High-pass filter cuts fan vibration, desk rumble below 85Hz
+    // Gentle high-pass filter cuts sub-60Hz fan vibration / desk rumble without altering speech formants
     const highPass = ctx.createBiquadFilter();
     highPass.type = "highpass";
-    highPass.frequency.value = 85;
+    highPass.frequency.value = 60;
     highPass.Q.value = 0.7;
-
-    // Vocal boost filter around speech resonance
-    const vocalBoost = ctx.createBiquadFilter();
-    vocalBoost.type = "peaking";
-    vocalBoost.frequency.value = 2000;
-    vocalBoost.Q.value = 1.0;
-    vocalBoost.gain.value = 3.0;
 
     // Buffer chunk collector (4096 samples per chunk = ~256ms intervals at 16kHz)
     const processor = ctx.createScriptProcessor(4096, 1, 1);
@@ -279,8 +273,7 @@ export async function startAudioCapture() {
     };
 
     source.connect(highPass);
-    highPass.connect(vocalBoost);
-    vocalBoost.connect(processor);
+    highPass.connect(processor);
     // Keep ScriptProcessor callbacks alive without playing the microphone back.
     const muteGain = ctx.createGain();
     muteGain.gain.value = 0;

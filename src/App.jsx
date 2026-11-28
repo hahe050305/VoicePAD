@@ -12,7 +12,7 @@ import {
   subscribeVisionModelStatus,
   prewarmVisionModel,
 } from "./services/visionService.js";
-import { prewarmOCR } from "./services/tesseractService.js";
+import { prewarmOCR, subscribeOcrStatus } from "./services/tesseractService.js";
 import {
   prewarmMoonshine,
   isMoonshineReady,
@@ -88,23 +88,51 @@ const [filteredEntries, setFilteredEntries] = useState([]);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [moonshineStatus, setMoonshineStatus] = useState({ state: "idle", progress: null, error: null });
   const [visionModelStatus, setVisionModelStatus] = useState({ state: "idle", progress: null, error: null });
+  const [ocrStatus, setOcrStatus] = useState({ state: "idle", progress: null, error: null });
+  const [isVisionOcrPipelineActive, setIsVisionOcrPipelineActive] = useState(false);
+  const [modelsPreviouslyCached, setModelsPreviouslyCached] = useState(() => {
+    try {
+      return typeof window !== "undefined" && localStorage.getItem("voicepad_models_cached") === "true";
+    } catch {
+      return false;
+    }
+  });
   const [showAiReadyBadge, setShowAiReadyBadge] = useState(false);
   const [manualNote, setManualNote] = useState("");
   const [autoTags, setAutoTags] = useState([]);
   const prevLoadingRef = useRef(false);
 
   const isVisionLoading = visionModelStatus.state === "loading";
+  const isOcrLoading = ocrStatus.state === "loading";
+  const isVisionOrOcrLoading = isVisionLoading || isOcrLoading || isVisionOcrPipelineActive;
   const isMoonshineLoading = moonshineStatus.state === "loading";
-  const isAnyModelLoading = isVisionLoading || isMoonshineLoading;
+  const isAnyModelLoading = !modelsPreviouslyCached && (isVisionOrOcrLoading || isMoonshineLoading);
 
   useEffect(() => {
-    if (prevLoadingRef.current && !isAnyModelLoading && (visionModelStatus.state === "ready" || moonshineStatus.state === "ready")) {
+    const allReady =
+      visionModelStatus.state === "ready" &&
+      ocrStatus.state === "ready" &&
+      moonshineStatus.state === "ready";
+    if (allReady && !modelsPreviouslyCached) {
+      setModelsPreviouslyCached(true);
+      try {
+        localStorage.setItem("voicepad_models_cached", "true");
+      } catch { /* ignore storage errors */ }
+    }
+  }, [visionModelStatus.state, ocrStatus.state, moonshineStatus.state, modelsPreviouslyCached]);
+
+  useEffect(() => {
+    if (
+      prevLoadingRef.current &&
+      !isAnyModelLoading &&
+      (visionModelStatus.state === "ready" || ocrStatus.state === "ready" || moonshineStatus.state === "ready")
+    ) {
       setShowAiReadyBadge(true);
       const timer = setTimeout(() => setShowAiReadyBadge(false), 3500);
       return () => clearTimeout(timer);
     }
     prevLoadingRef.current = isAnyModelLoading;
-  }, [isAnyModelLoading, visionModelStatus.state, moonshineStatus.state]);
+  }, [isAnyModelLoading, visionModelStatus.state, ocrStatus.state, moonshineStatus.state]);
 
   // In-card editing state
   const [editingId, setEditingId] = useState(null);
@@ -287,28 +315,33 @@ const loadEntries = useCallback(async () => { await seedDemoData();
       .then(loadEntries)
       .catch((err) => console.error("Failed to load memories:", err));
     const unsubscribeVisionStatus = subscribeVisionModelStatus(setVisionModelStatus);
-
-// Start CLIP warmup as soon as the app mounts so its category embeddings are
-// ready for image tagging. Keep OCR deferred to an idle period to limit contention.
-const waitForIdle = () => new Promise((resolve) => {
-  if (typeof window.requestIdleCallback === "function") {
-    window.requestIdleCallback(resolve, { timeout: 2500 });
-  } else {
-    window.setTimeout(resolve, 700);
-  }
-});
-void (async () => {
-  await prewarmVisionModel();
-  await waitForIdle();
-  await prewarmOCR();
-  await waitForIdle();
-  void prewarmMoonshine();
-})();
-
+    const unsubscribeOcrStatus = subscribeOcrStatus(setOcrStatus);
     const unsubscribeMoonshine = subscribeMoonshineStatus(setMoonshineStatus);
+
+    // Prewarm CLIP followed by OCR in one pipeline, and Moonshine Voice in parallel
+    // so both download proactively on startup without waiting for the mic button.
+    const waitForIdle = () => new Promise((resolve) => {
+      if (typeof window.requestIdleCallback === "function") {
+        window.requestIdleCallback(resolve, { timeout: 2000 });
+      } else {
+        window.setTimeout(resolve, 500);
+      }
+    });
+    setIsVisionOcrPipelineActive(true);
+    void (async () => {
+      try {
+        await prewarmVisionModel();
+        await waitForIdle();
+        await prewarmOCR();
+      } finally {
+        setIsVisionOcrPipelineActive(false);
+      }
+    })();
+    void prewarmMoonshine();
 
     return () => {
       unsubscribeVisionStatus();
+      unsubscribeOcrStatus();
       unsubscribeMoonshine();
     };
   }, [loadEntries]);
@@ -492,34 +525,43 @@ searchDebounceRef.current = setTimeout(async () => {
   useEffect(() => {
     if (!isListening) return undefined;
     let cancelled = false;
+    let timeoutId = null;
 
-    const timer = window.setInterval(async () => {
-      if (cancelled || !listeningRef.current || !isMoonshineReady()) return;
-      const text = (await transcribeCurrentAudioSnapshot()).trim();
-      if (cancelled || !listeningRef.current || !text) return;
-
-      setVoiceTranscript(text);
-      setSearchMode("voice");
-      const instantHits = lexicalSearch(text);
-      if (instantHits.length > 0) {
-        setFilteredEntries(instantHits);
-      }
-      try {
-        const result = await fastSearch(text);
-        if (cancelled || !listeningRef.current) return;
-        if (result) {
-          setFilteredEntries(Array.isArray(result) ? result : [result]);
-        } else if (instantHits.length === 0) {
-          setFilteredEntries([]);
+    const runLivePass = async () => {
+      if (cancelled || !listeningRef.current) return;
+      if (isMoonshineReady()) {
+        const text = (await transcribeCurrentAudioSnapshot()).trim();
+        if (!cancelled && listeningRef.current && text) {
+          setVoiceTranscript(text);
+          setSearchMode("voice");
+          const instantHits = lexicalSearch(text);
+          if (instantHits.length > 0) {
+            setFilteredEntries(instantHits);
+          }
+          try {
+            const result = await fastSearch(text);
+            if (!cancelled && listeningRef.current) {
+              if (result) {
+                setFilteredEntries(Array.isArray(result) ? result : [result]);
+              } else if (instantHits.length === 0) {
+                setFilteredEntries([]);
+              }
+            }
+          } catch {
+            // Keep lexical hits if vector search fails during live preview
+          }
         }
-      } catch {
-        // Keep lexical hits if vector search fails during live preview
       }
-    }, 800);
+      if (!cancelled && listeningRef.current) {
+        timeoutId = window.setTimeout(runLivePass, 450);
+      }
+    };
+
+    timeoutId = window.setTimeout(runLivePass, 450);
 
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
     };
   }, [isListening]);
 
@@ -1372,18 +1414,63 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
   </div>
   <div className="flex items-center gap-2">
     {isAnyModelLoading ? (
-      <div
-        className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-[10px] font-medium animate-pulse"
-        title={visionModelStatus.progress != null ? `Preparing on-device AI (${visionModelStatus.progress}%)` : "Preparing on-device AI in background"}
-      >
-        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping shrink-0" />
-        <span className="tracking-tight">
-          {isVisionLoading && visionModelStatus.progress != null && visionModelStatus.progress > 0
-            ? `AI Vision ${visionModelStatus.progress}%`
-            : isMoonshineLoading && moonshineStatus.progress != null && moonshineStatus.progress > 0
-              ? `AI Voice ${moonshineStatus.progress}%`
-              : "AI Readying..."}
-        </span>
+      <div className="flex flex-col gap-1 min-w-[130px]">
+        {(isVisionOrOcrLoading || visionModelStatus.state === "ready") && (
+          <div
+            className="flex flex-col gap-0.5 px-2.5 py-1 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-[10px] font-medium"
+            title="CLIP Vision followed by OCR"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="tracking-tight">
+                {isVisionLoading
+                  ? `CLIP ${visionModelStatus.progress ?? 0}%`
+                  : isOcrLoading
+                    ? `OCR ${ocrStatus.progress ?? 0}%`
+                    : "CLIP + OCR ✓"}
+              </span>
+            </div>
+            <div className="w-full h-1 rounded-full bg-indigo-950/80 overflow-hidden">
+              <div
+                className="h-full bg-indigo-400 transition-all duration-200"
+                style={{
+                  width: `${
+                    isVisionLoading
+                      ? Math.max(4, visionModelStatus.progress ?? 0)
+                      : isOcrLoading
+                        ? Math.max(4, ocrStatus.progress ?? 0)
+                        : 100
+                  }%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
+        {(isMoonshineLoading || moonshineStatus.state === "ready") && (
+          <div
+            className="flex flex-col gap-0.5 px-2.5 py-1 rounded-lg bg-violet-500/10 border border-violet-500/20 text-violet-300 text-[10px] font-medium"
+            title="On-device Voice Model"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="tracking-tight">
+                {isMoonshineLoading
+                  ? `Voice ${moonshineStatus.progress ?? 0}%`
+                  : "Voice ✓"}
+              </span>
+            </div>
+            <div className="w-full h-1 rounded-full bg-violet-950/80 overflow-hidden">
+              <div
+                className="h-full bg-violet-400 transition-all duration-200"
+                style={{
+                  width: `${
+                    isMoonshineLoading
+                      ? Math.max(4, moonshineStatus.progress ?? 0)
+                      : 100
+                  }%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
       </div>
     ) : showAiReadyBadge ? (
       <div

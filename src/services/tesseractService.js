@@ -9,6 +9,20 @@ let queue = Promise.resolve();
 let ocrWarmupPromise = null;
 const idleTimeout = 180000; // Keep worker warm for 3 minutes during user session
 
+let ocrStatus = { state: "idle", progress: null, error: null };
+const ocrStatusListeners = new Set();
+
+export function subscribeOcrStatus(callback) {
+  ocrStatusListeners.add(callback);
+  callback(ocrStatus);
+  return () => ocrStatusListeners.delete(callback);
+}
+
+function updateOcrStatus(status) {
+  ocrStatus = { ...ocrStatus, ...status };
+  ocrStatusListeners.forEach((listener) => listener(ocrStatus));
+}
+
 function resetIdleTimer(worker) {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = setTimeout(async () => {
@@ -25,6 +39,7 @@ function resetIdleTimer(worker) {
 
 export async function getTesseractWorker() {
   if (!workerPromise) {
+    updateOcrStatus({ state: "loading", progress: 0, error: null });
     workerPromise = createWorker("eng", 1, {
       // Load eng.traineddata from the app's own bundle (public/eng.traineddata)
       // so it works fully offline — no CDN fetch needed after the first install.
@@ -32,12 +47,24 @@ export async function getTesseractWorker() {
       logger: (message) => {
         if (message.status === "recognizing text" && activeProgress) {
           activeProgress(Math.round((message.progress || 0) * 100));
+        } else if (
+          ocrStatus.state === "loading" &&
+          typeof message.progress === "number" &&
+          message.status !== "recognizing text"
+        ) {
+          updateOcrStatus({ state: "loading", progress: Math.round(message.progress * 100) });
         }
       },
-    }).catch((error) => {
-      workerPromise = null;
-      throw error;
-    });
+    })
+      .then((worker) => {
+        updateOcrStatus({ state: "ready", progress: 100, error: null });
+        return worker;
+      })
+      .catch((error) => {
+        workerPromise = null;
+        updateOcrStatus({ state: "error", progress: null, error: error?.message || String(error) });
+        throw error;
+      });
   }
   return workerPromise;
 }
