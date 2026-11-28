@@ -108,10 +108,13 @@ const [filteredEntries, setFilteredEntries] = useState([]);
   const isOcrLoading = ocrStatus.state === "loading";
   const isMoonshineLoading = moonshineStatus.state === "loading";
   const isAnyModelLoading = !modelsPreviouslyCached && (isVisionLoading || isOcrLoading || isMoonshineLoading);
+  // Treat as "ready" once all workers report ready, OR if models were previously
+  // cached (they warm up silently from cache — no need to wait for workers).
   const allModelsReady =
-    visionModelStatus.state === "ready" &&
-    ocrStatus.state === "ready" &&
-    moonshineStatus.state === "ready";
+    modelsPreviouslyCached ||
+    (visionModelStatus.state === "ready" &&
+      ocrStatus.state === "ready" &&
+      moonshineStatus.state === "ready");
 
   useEffect(() => {
     if (!modelsPreviouslyCached && isAnyModelLoading && !modelsPopupDismissedRef.current) {
@@ -547,11 +550,11 @@ searchDebounceRef.current = setTimeout(async () => {
         }
       }
       if (!cancelled && listeningRef.current) {
-        timeoutId = window.setTimeout(runLivePass, 450);
+        timeoutId = window.setTimeout(runLivePass, 300);
       }
     };
 
-    timeoutId = window.setTimeout(runLivePass, 450);
+    timeoutId = window.setTimeout(runLivePass, 300);
 
     return () => {
       cancelled = true;
@@ -1396,7 +1399,7 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
 <div className="min-h-screen bg-[#07090e] text-slate-100 flex flex-col items-center px-4 py-6 antialiased selection:bg-indigo-500 selection:text-white relative overflow-x-hidden"> {/* Ambient background glows */} <div className="fixed top-[-140px] left-1/2 -translate-x-1/2 w-[520px] h-[360px] bg-gradient-to-b from-indigo-600/20 via-violet-600/10 to-transparent blur-[110px] pointer-events-none rounded-full" /> <div className="fixed bottom-[-120px] right-[-100px] w-[360px] h-[360px] bg-sky-500/10 blur-[130px] pointer-events-none rounded-full" />
 
 {/* Clean Mobile App Header */}
-<header className="w-full max-w-md flex items-center justify-between pb-4 mb-2 z-10">
+<header className="w-full max-w-md flex items-center justify-between pb-3 mb-4 z-20">
   <div className="flex items-center gap-2.5">
     <img src="/voicepad-icon.png" alt="" className="w-10 h-10 object-contain rounded-xl shrink-0" />
     <div>
@@ -1452,58 +1455,68 @@ onClick={() => setOnboardingSlide((prev) => prev + 1)}
     </button>
 
     {showModelsPopup && (
-      <div className="absolute top-full right-0 mt-2 w-60 p-3 rounded-2xl bg-[#0d111a]/95 backdrop-blur-xl border border-white/10 shadow-2xl z-50 space-y-2.5 animate-in fade-in zoom-in-95 duration-150">
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] font-semibold text-white/90 tracking-tight">
-            On-Device AI Models
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              modelsPopupDismissedRef.current = true;
-              setShowModelsPopup(false);
-            }}
-            className="text-slate-400 hover:text-white text-xs px-1 rounded"
-            aria-label="Close AI models popup"
-          >
-            ✕
-          </button>
-        </div>
+      <>
+        {/* Backdrop for outside tap/click dismiss */}
+        <div
+          className="fixed inset-0 z-40"
+          onClick={() => {
+            modelsPopupDismissedRef.current = true;
+            setShowModelsPopup(false);
+          }}
+        />
+        <div className="absolute top-full right-0 mt-2 w-52 p-2.5 rounded-2xl bg-[#0c1017]/95 backdrop-blur-xl border border-white/10 shadow-2xl shadow-black/80 z-50 space-y-2 animate-in fade-in zoom-in-95 duration-150">
+          <div className="flex items-center justify-between pb-1 border-b border-white/5">
+            <span className="text-[10px] font-semibold text-white/90 tracking-tight">
+              On-Device AI Models
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                modelsPopupDismissedRef.current = true;
+                setShowModelsPopup(false);
+              }}
+              className="text-slate-400 hover:text-white text-xs px-1 rounded transition"
+              aria-label="Close AI models popup"
+            >
+              ✕
+            </button>
+          </div>
 
-        {[
-          { key: "clip", label: "CLIP Vision", status: visionModelStatus, barClass: "bg-indigo-400", trackClass: "bg-indigo-950/80" },
-          { key: "ocr", label: "OCR Text", status: ocrStatus, barClass: "bg-sky-400", trackClass: "bg-sky-950/80" },
-          { key: "voice", label: "Voice (Moonshine)", status: moonshineStatus, barClass: "bg-violet-400", trackClass: "bg-violet-950/80" },
-        ].map(({ key, label, status, barClass, trackClass }) => {
-          const isReady = status.state === "ready";
-          const isError = status.state === "error";
-          const pct = isReady ? 100 : Math.max(0, Math.min(100, status.progress ?? 0));
-          return (
-            <div key={key} className="space-y-1">
-              <div className="flex items-center justify-between text-[10px]">
-                <span className="text-slate-300 font-medium">{label}</span>
-                <span
-                  className={
-                    isReady
-                      ? "text-emerald-400 font-semibold"
-                      : isError
-                        ? "text-amber-400"
-                        : "text-slate-400"
-                  }
-                >
-                  {isReady ? "Ready ✓" : isError ? "Offline" : `${pct}%`}
-                </span>
+          {[
+            { key: "clip", label: "CLIP Vision", status: visionModelStatus, barClass: "bg-indigo-400", trackClass: "bg-indigo-950/80" },
+            { key: "ocr", label: "OCR Text", status: ocrStatus, barClass: "bg-sky-400", trackClass: "bg-sky-950/80" },
+            { key: "voice", label: "Voice STT", status: moonshineStatus, barClass: "bg-violet-400", trackClass: "bg-violet-950/80" },
+          ].map(({ key, label, status, barClass, trackClass }) => {
+            const isReady = status.state === "ready" || modelsPreviouslyCached;
+            const isError = status.state === "error";
+            const pct = isReady ? 100 : Math.max(0, Math.min(100, status.progress ?? 0));
+            return (
+              <div key={key} className="space-y-0.5">
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="text-slate-300 font-medium">{label}</span>
+                  <span
+                    className={
+                      isReady
+                        ? "text-emerald-400 font-semibold"
+                        : isError
+                          ? "text-amber-400"
+                          : "text-slate-400"
+                    }
+                  >
+                    {isReady ? "Ready ✓" : isError ? "Offline" : `${pct}%`}
+                  </span>
+                </div>
+                <div className={`w-full h-1 rounded-full ${trackClass} overflow-hidden`}>
+                  <div
+                    className={`h-full transition-all duration-200 ${isReady ? "bg-emerald-400" : isError ? "bg-amber-400/60" : barClass}`}
+                    style={{ width: `${isReady ? 100 : Math.max(status.state === "loading" ? 4 : 0, pct)}%` }}
+                  />
+                </div>
               </div>
-              <div className={`w-full h-1.5 rounded-full ${trackClass} overflow-hidden`}>
-                <div
-                  className={`h-full transition-all duration-200 ${isReady ? "bg-emerald-400" : isError ? "bg-amber-400/60" : barClass}`}
-                  style={{ width: `${isReady ? 100 : Math.max(status.state === "loading" ? 4 : 0, pct)}%` }}
-                />
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      </>
     )}
     <button
       type="button"

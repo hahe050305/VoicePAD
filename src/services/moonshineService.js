@@ -302,7 +302,7 @@ export async function transcribeCurrentAudioSnapshot() {
   const sampleRate = capturedSampleRate || activeAudioContext?.sampleRate || 16000;
   const audioData = mergeChunks(chunksSnapshot);
   const pcm16k = resampleTo16k(audioData, sampleRate);
-  const prepared = preparePcmForMoonshine(pcm16k, 16000 * 0.4);
+  const prepared = preparePcmForMoonshine(pcm16k, 16000 * 0.3);
   if (!prepared) return "";
 
   liveSnapshotInFlight = true;

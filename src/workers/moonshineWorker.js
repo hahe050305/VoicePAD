@@ -34,7 +34,10 @@ async function getTranscriber() {
       const modelId = "onnx-community/moonshine-tiny-ONNX";
 
       const progress_callback = (progress) => {
-        if (progress.status === "progress_total") {
+        // Fire on 'progress_total' (overall combined progress) and also 'progress'
+        // (per-file progress) so the loading bar is smooth during both first download
+        // and cached load from the browser's Cache API.
+        if (progress.status === "progress_total" || progress.status === "progress") {
           postStatus({
             state: "loading",
             progress: Math.round(progress.progress ?? 0),
@@ -81,10 +84,15 @@ self.onmessage = async ({ data }) => {
       // @huggingface/transformers' _call_moonshine defaults max_new_tokens to
       // Math.floor(samples / 16000) * 6, which evaluates to 0 for <1s audio.
       // Ensure a generous token budget so short words and phrases transcribe reliably.
+      // Use 64 minimum (covers ~4-word phrases) with 24 tokens/sec for longer speech.
+      // no_repeat_ngram_size=3 prevents looping artifacts on short noisy audio.
       const durationSec = audioData.length / 16000;
-      const max_new_tokens = Math.max(32, Math.ceil(durationSec * 16));
+      const max_new_tokens = Math.max(64, Math.ceil(durationSec * 24));
 
-      const output = await transcriber(audioData, { max_new_tokens });
+      const output = await transcriber(audioData, {
+        max_new_tokens,
+        no_repeat_ngram_size: 3,
+      });
       const rawText = Array.isArray(output)
         ? output[0]?.text || ""
         : typeof output === "string"
